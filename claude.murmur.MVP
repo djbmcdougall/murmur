@@ -38,6 +38,1770 @@
  * ├── LICENSE                  # License information
  */
 
+# Create React TypeScript app
+npx create-react-app client --template typescript
+
+# Navigate to client directory
+cd client
+
+# Install dependencies
+npm install @reduxjs/toolkit react-redux axios material-ui @emotion/react @emotion/styled framer-motion tailwindcss postcss autoprefixer react-router-dom react-infinite-scroll-component websocket
+
+# Install dev dependencies
+npm install --save-dev @types/react-redux @types/websocket
+
+# Initialize Tailwind CSS
+npx tailwindcss init -p
+
+# Create server directory
+mkdir -p server/src/{config,controllers,middleware,models,routes,services,types,utils}
+
+# Navigate to server directory
+cd server
+
+# Initialize package.json
+npm init -y
+
+# Install dependencies
+npm install express cors dotenv helmet morgan mongoose pg winston google-cloud/speech @google-cloud/speech socket.io jsonwebtoken bcrypt
+
+# Install dev dependencies
+npm install --save-dev typescript ts-node nodemon @types/express @types/cors @types/morgan @types/pg @types/bcrypt @types/jsonwebtoken
+
+# Initialize TypeScript configuration
+npx tsc --init
+
+// server/src/services/speechToTextService.ts
+import speech from '@google-cloud/speech';
+import fs from 'fs';
+import { promisify } from 'util';
+import path from 'path';
+
+// Create client with credentials
+const client = new speech.SpeechClient({
+  keyFilename: path.join(__dirname, '../../config/google-credentials.json')
+});
+
+export interface SpeechToTextResult {
+  text: string;
+  confidence: number;
+}
+
+/**
+ * Converts audio file to text using Google Speech-to-Text API
+ * @param audioFilePath Path to the audio file
+ * @returns Transcribed text and confidence score
+ */
+export const convertAudioToText = async (audioFilePath: string): Promise<SpeechToTextResult> => {
+  try {
+    // Read audio file
+    const readFile = promisify(fs.readFile);
+    const audioBytes = await readFile(audioFilePath);
+    const audio = {
+      content: audioBytes.toString('base64'),
+    };
+
+    // Configure request
+    const config = {
+      encoding: 'LINEAR16',
+      sampleRateHertz: 16000,
+      languageCode: 'en-US',
+      enableAutomaticPunctuation: true,
+      model: 'phone_call', // Optimized for voice recordings
+    };
+
+    const request = {
+      audio: audio,
+      config: config,
+    };
+
+    // Perform speech recognition
+    const [response] = await client.recognize(request);
+    const transcription = response.results
+      ?.map(result => result.alternatives?.[0]?.transcript)
+      .filter(Boolean)
+      .join('\n') || '';
+    
+    const confidence = response.results?.[0]?.alternatives?.[0]?.confidence || 0;
+
+    return {
+      text: transcription,
+      confidence: confidence
+    };
+  } catch (error) {
+    console.error('Error in speech to text conversion:', error);
+    throw new Error('Failed to convert speech to text');
+  }
+};
+
+export default {
+  convertAudioToText
+};
+
+// server/src/services/sentimentService.ts
+import { spawn } from 'child_process';
+import path from 'path';
+
+export interface SentimentResult {
+  text: string;
+  sentiment: {
+    polarity: number;  // Range from -1 (negative) to 1 (positive)
+    subjectivity: number;  // Range from 0 (factual) to 1 (subjective)
+  };
+  entities: Array<{
+    text: string;
+    label: string;
+    start: number;
+    end: number;
+  }>;
+  keywords: string[];
+}
+
+/**
+ * Analyzes text sentiment using spaCy through a Python script
+ * @param text Text to analyze
+ * @returns Sentiment analysis results
+ */
+export const analyzeSentiment = async (text: string): Promise<SentimentResult> => {
+  return new Promise((resolve, reject) => {
+    try {
+      const scriptPath = path.join(__dirname, '../python/sentiment_analysis.py');
+      const process = spawn('python', [scriptPath, text]);
+      
+      let result = '';
+      
+      process.stdout.on('data', (data) => {
+        result += data.toString();
+      });
+      
+      process.stderr.on('data', (data) => {
+        console.error(`Error from Python script: ${data}`);
+      });
+      
+      process.on('close', (code) => {
+        if (code !== 0) {
+          return reject(new Error(`Process exited with code ${code}`));
+        }
+        
+        try {
+          const parsedResult = JSON.parse(result);
+          resolve(parsedResult);
+        } catch (error) {
+          reject(new Error('Failed to parse sentiment analysis result'));
+        }
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+};
+
+export default {
+  analyzeSentiment
+};
+
+# server/src/python/sentiment_analysis.py
+import sys
+import json
+import spacy
+from spacytextblob.spacytextblob import SpacyTextBlob
+
+# Load spaCy model
+nlp = spacy.load('en_core_web_md')
+nlp.add_pipe('spacytextblob')
+
+def analyze_sentiment(text):
+    # Process text with spaCy
+    doc = nlp(text)
+    
+    # Extract sentiment
+    polarity = doc._.blob.polarity
+    subjectivity = doc._.blob.subjectivity
+    
+    # Extract entities
+    entities = [
+        {
+            "text": ent.text,
+            "label": ent.label_,
+            "start": ent.start_char,
+            "end": ent.end_char
+        }
+        for ent in doc.ents
+    ]
+    
+    # Extract keywords (nouns and proper nouns)
+    keywords = [token.text for token in doc if token.pos_ in ('NOUN', 'PROPN') and not token.is_stop]
+    
+    # Return results
+    return {
+        "text": text,
+        "sentiment": {
+            "polarity": polarity,
+            "subjectivity": subjectivity
+        },
+        "entities": entities,
+        "keywords": list(set(keywords))  # Remove duplicates
+    }
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "No text provided"}))
+        sys.exit(1)
+    
+    text = sys.argv[1]
+    result = analyze_sentiment(text)
+    print(json.dumps(result))
+
+// server/src/models/Recommendation.ts
+import mongoose, { Document, Schema } from 'mongoose';
+
+export interface IRecommendation extends Document {
+  userId: mongoose.Types.ObjectId;
+  title: string;
+  content: string;
+  audioUrl: string;
+  audioDuration: number;
+  categories: string[];
+  sentiment: {
+    polarity: number;
+    subjectivity: number;
+  };
+  keywords: string[];
+  likes: number;
+  views: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const RecommendationSchema: Schema = new Schema({
+  userId: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  title: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  content: {
+    type: String,
+    required: true
+  },
+  audioUrl: {
+    type: String,
+    required: true
+  },
+  audioDuration: {
+    type: Number,
+    required: true
+  },
+  categories: [{
+    type: String,
+    required: true
+  }],
+  sentiment: {
+    polarity: {
+      type: Number,
+      required: true
+    },
+    subjectivity: {
+      type: Number,
+      required: true
+    }
+  },
+  keywords: [{
+    type: String
+  }],
+  likes: {
+    type: Number,
+    default: 0
+  },
+  views: {
+    type: Number,
+    default: 0
+  }
+}, {
+  timestamps: true
+});
+
+// Create text index for search functionality
+RecommendationSchema.index({ 
+  title: 'text', 
+  content: 'text',
+  keywords: 'text'
+});
+
+export default mongoose.model<IRecommendation>('Recommendation', RecommendationSchema);
+
+// server/src/models/User.ts
+import mongoose, { Document, Schema } from 'mongoose';
+import bcrypt from 'bcrypt';
+
+export interface IUser extends Document {
+  username: string;
+  email: string;
+  password: string;
+  profilePicture: string;
+  bio: string;
+  listeners: mongoose.Types.ObjectId[];
+  listening: mongoose.Types.ObjectId[];
+  muted: mongoose.Types.ObjectId[];
+  badges: string[];
+  recommendations: mongoose.Types.ObjectId[];
+  streak: number;
+  lastRecommendation: Date;
+  comparePassword(candidatePassword: string): Promise<boolean>;
+}
+
+const UserSchema: Schema = new Schema({
+  username: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true
+  },
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true,
+    lowercase: true
+  },
+  password: {
+    type: String,
+    required: true
+  },
+  profilePicture: {
+    type: String,
+    default: 'default-profile.png'
+  },
+  bio: {
+    type: String,
+    default: ''
+  },
+  listeners: [{
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  listening: [{
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  muted: [{
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  badges: [{
+    type: String
+  }],
+  recommendations: [{
+    type: Schema.Types.ObjectId,
+    ref: 'Recommendation'
+  }],
+  streak: {
+    type: Number,
+    default: 0
+  },
+  lastRecommendation: {
+    type: Date
+  }
+}, {
+  timestamps: true
+});
+
+// Pre-save hook to hash password
+UserSchema.pre<IUser>('save', async function(next) {
+  // Only hash the password if it's modified or new
+  if (!this.isModified('password')) return next();
+  
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error as Error);
+  }
+});
+
+// Method to compare passwords
+UserSchema.methods.comparePassword = async function(candidatePassword: string): Promise<boolean> {
+  return bcrypt.compare(candidatePassword, this.password);
+};
+
+export default mongoose.model<IUser>('User', UserSchema);
+
+// server/src/services/storageService.ts
+import fs from 'fs';
+import path from 'path';
+import { promisify } from 'util';
+import AWS from 'aws-sdk';
+import { v4 as uuidv4 } from 'uuid';
+
+// Configure AWS S3
+const s3 = new AWS.S3({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION
+});
+
+const bucketName = process.env.AWS_S3_BUCKET_NAME || 'murmur-audio';
+
+/**
+ * Uploads an audio file to AWS S3
+ * @param file Express file object
+ * @returns URL of the uploaded file
+ */
+export const uploadAudio = async (file: Express.Multer.File): Promise<string> => {
+  try {
+    const fileContent = await promisify(fs.readFile)(file.path);
+    const fileExtension = path.extname(file.originalname);
+    const fileName = `${uuidv4()}${fileExtension}`;
+    
+    const uploadParams = {
+      Bucket: bucketName,
+      Key: `audio/${fileName}`,
+      Body: fileContent,
+      ContentType: file.mimetype,
+      ACL: 'public-read'
+    };
+    
+    const result = await s3.upload(uploadParams).promise();
+    
+    // Clean up temp file
+    await promisify(fs.unlink)(file.path);
+    
+    return result.Location;
+  } catch (error) {
+    console.error('Error uploading audio to S3:', error);
+    throw new Error('Failed to upload audio');
+  }
+};
+
+/**
+ * Delete an audio file from AWS S3
+ * @param audioUrl URL of the audio file to delete
+ */
+export const deleteAudio = async (audioUrl: string): Promise<void> => {
+  try {
+    // Extract key from URL
+    const key = audioUrl.split(`${bucketName}/`)[1];
+    
+    const deleteParams = {
+      Bucket: bucketName,
+      Key: key
+    };
+    
+    await s3.deleteObject(deleteParams).promise();
+  } catch (error) {
+    console.error('Error deleting audio from S3:', error);
+    throw new Error('Failed to delete audio');
+  }
+};
+
+export default {
+  uploadAudio,
+  deleteAudio
+};
+
+// server/src/controllers/userController.ts
+import { Request, Response } from 'express';
+import User from '../models/User';
+import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
+
+// Register a new user
+export const register = async (req: Request, res: Response) => {
+  try {
+    const { username, email, password } = req.body;
+
+    // Check if user already exists
+    const userExists = await User.findOne({ 
+      $or: [{ username }, { email }] 
+    });
+
+    if (userExists) {
+      return res.status(400).json({ message: 'Username or email already in use' });
+    }
+
+    // Create new user
+    const user = new User({
+      username,
+      email,
+      password
+    });
+
+    await user.save();
+
+    // Create token
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string, {
+      expiresIn: '30d'
+    });
+
+    res.status(201).json({
+      _id: user._id,
+      username: user.username,
+      email: user.email,
+      profilePicture: user.profilePicture,
+      token
+    });
+  } catch (error) {
+    console.error('Error registering user:', error);
+    res.status(500).json({ message: 'Failed to register user' });
+  }
+};
+
+// Login user
+export const login = async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+
+    // Find user
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    // Check password
+    const isMatch = await user.comparePassword(password);
+
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    // Create token
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string, {
+      expiresIn: '30d'
+    });
+
+    res.status(200).json({
+      _id: user._id,
+      username: user.username,
+      email: user.email,
+      profilePicture: user.profilePicture,
+      token
+    });
+  } catch (error) {
+    console.error('Error logging in:', error);
+    res.status(500).json({ message: 'Failed to login' });
+  }
+};
+
+// Get user profile
+export const getProfile = async (req: Request, res: Response) => {
+  try {
+    const { username } = req.params;
+
+    const user = await User.findOne({ username })
+      .select('-password -email')
+      .populate('recommendations', 'title createdAt views likes');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.status(200).json(user);
+  } catch (error) {
+    console.error('Error fetching user profile:', error);
+    res.status(500).json({ message: 'Failed to fetch user profile' });
+  }
+};
+
+// Listen to a user
+export const listenToUser = async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user?.id;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+
+    if (userId === currentUserId) {
+      return res.status(400).json({ message: 'You cannot listen to yourself' });
+    }
+
+    const [currentUser, targetUser] = await Promise.all([
+      User.findById(currentUserId),
+      User.findById(userId)
+    ]);
+
+    if (!currentUser || !targetUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check if already listening
+    if (currentUser.listening.includes(targetUser._id)) {
+      return res.status(400).json({ message: 'Already listening to this user' });
+    }
+
+    // Update current user's listening list
+    currentUser.listening.push(targetUser._id);
+    
+    // Update target user's listeners list
+    targetUser.listeners.push(currentUser._id);
+
+    await Promise.all([currentUser.save(), targetUser.save()]);
+
+    res.status(200).json({ message: 'Successfully listening to user' });
+  } catch (error) {
+    console.error('Error listening to user:', error);
+    res.status(500).json({ message: 'Failed to listen to user' });
+  }
+};
+
+// Mute a user
+export const muteUser = async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user?.id;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+
+    if (userId === currentUserId) {
+      return res.status(400).json({ message: 'You cannot mute yourself' });
+    }
+
+    const currentUser = await User.findById(currentUserId);
+
+    if (!currentUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check if already muted
+    if (currentUser.muted.includes(userId)) {
+      return res.status(400).json({ message: 'User already muted' });
+    }
+
+    // Add to muted list
+    currentUser.muted.push(userId);
+    await currentUser.save();
+
+    res.status(200).json({ message: 'User muted successfully' });
+  } catch (error) {
+    console.error('Error muting user:', error);
+    res.status(500).json({ message: 'Failed to mute user' });
+  }
+};
+
+export default {
+  register,
+  login,
+  getProfile,
+  listenToUser,
+  muteUser
+};
+
+// server/src/routes/index.ts
+import { Router } from 'express';
+import userRoutes from './userRoutes';
+import recommendationRoutes from './recommendationRoutes';
+
+const router = Router();
+
+// Root route
+router.get('/', (req, res) => {
+  res.json({ message: 'Welcome to Murmur API' });
+});
+
+// API routes
+router.use('/users', userRoutes);
+router.use('/recommendations', recommendationRoutes);
+
+export default router;
+
+// server/src/routes/userRoutes.ts
+import { Router } from 'express';
+import userController from '../controllers/userController';
+import { protect } from '../middleware/authMiddleware';
+
+const router = Router();
+
+// Public routes
+router.post('/register', userController.register);
+router.post('/login', userController.login);
+router.get('/profile/:username', userController.getProfile);
+
+// Protected routes
+router.post('/listen/:userId', protect, userController.listenToUser);
+router.post('/mute/:userId', protect, userController.muteUser);
+
+export default router;
+
+// server/src/routes/recommendationRoutes.ts
+import { Router } from 'express';
+import recommendationController from '../controllers/recommendationController';
+import { protect } from '../middleware/authMiddleware';
+import upload from '../middleware/uploadMiddleware';
+
+const router = Router();
+
+// Public routes
+router.get('/', recommendationController.getFeed);
+router.get('/:id', recommendationController.getRecommendationById);
+
+// Protected routes
+router.post('/', protect, upload.single('audio'), recommendationController.createRecommendation);
+router.post('/:id/like', protect, recommendationController.likeRecommendation);
+
+export default router;
+
+// server/src/routes/index.ts
+import { Router } from 'express';
+import userRoutes from './userRoutes';
+import recommendationRoutes from './recommendationRoutes';
+
+const router = Router();
+
+// Root route
+router.get('/', (req, res) => {
+  res.json({ message: 'Welcome to Murmur API' });
+});
+
+// API routes
+router.use('/users', userRoutes);
+router.use('/recommendations', recommendationRoutes);
+
+export default router;
+
+// server/src/routes/userRoutes.ts
+import { Router } from 'express';
+import userController from '../controllers/userController';
+import { protect } from '../middleware/authMiddleware';
+
+const router = Router();
+
+// Public routes
+router.post('/register', userController.register);
+router.post('/login', userController.login);
+router.get('/profile/:username', userController.getProfile);
+
+// Protected routes
+router.post('/listen/:userId', protect, userController.listenToUser);
+router.post('/mute/:userId', protect, userController.muteUser);
+
+export default router;
+
+// server/src/routes/recommendationRoutes.ts
+import { Router } from 'express';
+import recommendationController from '../controllers/recommendationController';
+import { protect } from '../middleware/authMiddleware';
+import upload from '../middleware/uploadMiddleware';
+
+const router = Router();
+
+// Public routes
+router.get('/', recommendationController.getFeed);
+router.get('/:id', recommendationController.getRecommendationById);
+
+// Protected routes
+router.post('/', protect, upload.single('audio'), recommendationController.createRecommendation);
+router.post('/:id/like', protect, recommendationController.likeRecommendation);
+
+export default router;
+
+// server/src/middleware/authMiddleware.ts
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import User from '../models/User';
+
+// Extend Express Request type to include user
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+      };
+    }
+  }
+}
+
+/**
+ * Middleware to protect routes
+ * Verifies JWT token and adds user ID to request
+ */
+export const protect = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let token;
+
+    // Check for token in Authorization header
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith('Bearer')
+    ) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      return res.status(401).json({ message: 'Not authorized, no token' });
+    }
+
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { id: string };
+
+    // Check if user exists
+    const userExists = await User.findById(decoded.id).select('-password');
+
+    if (!userExists) {
+      return res.status(401).json({ message: 'Not authorized, user not found' });
+    }
+
+    // Add user to request
+    req.user = { id: decoded.id };
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(401).json({ message: 'Not authorized, token failed' });
+  }
+};
+
+// server/src/middleware/uploadMiddleware.ts
+import multer from 'multer';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+
+// Create uploads directory if it doesn't exist
+const uploadDir = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueFilename = `${uuidv4()}${path.extname(file.originalname)}`;
+    cb(null, uniqueFilename);
+  }
+});
+
+// File filter to only allow audio files
+const fileFilter = (req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowedMimeTypes = [
+    'audio/mpeg',
+    'audio/mp3',
+    'audio/wav',
+    'audio/ogg',
+    'audio/webm'
+  ];
+
+  if (allowedMimeTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only audio files are allowed.'));
+  }
+};
+
+// Configure multer
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  }
+});
+
+export default upload;
+
+// server/src/index.ts
+import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import dotenv from 'dotenv';
+import path from 'path';
+import http from 'http';
+import mongoose from 'mongoose';
+import { Server as SocketIOServer } from 'socket.io';
+import routes from './routes';
+
+// Load environment variables
+dotenv.config();
+
+// Create Express app
+const app = express();
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    methods: ['GET', 'POST']
+  }
+});
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI as string)
+  .then(() => {
+    console.log('Connected to MongoDB');
+  })
+  .catch((error) => {
+    console.error('MongoDB connection error:', error);
+    process.exit(1);
+  });
+
+// Middleware
+app.use(cors());
+app.use(helmet());
+app.use(morgan('dev'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// API routes
+app.use('/api', routes);
+
+// Error handling middleware
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error('Error:', err);
+  res.status(500).json({ message: err.message || 'An unexpected error occurred' });
+});
+
+// WebSocket connections
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+
+  // Real-time notification for new recommendations
+  socket.on('join-feed', () => {
+    socket.join('feed');
+  });
+
+  // Real-time notification for user profile
+  socket.on('join-user', (username: string) => {
+    socket.join(`user:${username}`);
+  });
+});
+
+// Export for real-time notifications
+export { io };
+
+// Start server
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+# Server Configuration
+PORT=5000
+NODE_ENV=development
+CLIENT_URL=http://localhost:3000
+
+# MongoDB Connection
+MONGODB_URI=mongodb://localhost:27017/murmur
+
+# JWT Secret
+JWT_SECRET=your_jwt_secret_key_here
+
+# AWS S3 Configuration
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+AWS_REGION=us-east-1
+AWS_S3_BUCKET_NAME=murmur-audio
+
+# Google Cloud Configuration
+GOOGLE_APPLICATION_CREDENTIALS=./config/google-credentials.json
+
+// client/src/redux/store.ts
+import { configureStore } from '@reduxjs/toolkit';
+import authReducer from './slices/authSlice';
+import recommendationReducer from './slices/recommendationSlice';
+import userReducer from './slices/userSlice';
+import notificationReducer from './slices/notificationSlice';
+
+const store = configureStore({
+  reducer: {
+    auth: authReducer,
+    recommendations: recommendationReducer,
+    user: userReducer,
+    notifications: notificationReducer
+  }
+});
+
+// Infer the `RootState` and `AppDispatch` types from the store itself
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+
+export default store;
+
+// client/src/redux/slices/authSlice.ts
+import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import axios from 'axios';
+
+interface User {
+  _id: string;
+  username: string;
+  email: string;
+  profilePicture: string;
+  token: string;
+}
+
+interface AuthState {
+  user: User | null;
+  isLoading: boolean;
+  error: string | null;
+}
+
+interface LoginCredentials {
+  email: string;
+  password: string;
+}
+
+interface RegisterCredentials {
+  username: string;
+  email: string;
+  password: string;
+}
+
+const initialState: AuthState = {
+  user: localStorage.getItem('user') 
+    ? JSON.parse(localStorage.getItem('user') as string) 
+    : null,
+  isLoading: false,
+  error: null
+};
+
+// Login user
+export const login = createAsyncThunk(
+  'auth/login',
+  async (credentials: LoginCredentials, { rejectWithValue }) => {
+    try {
+      const { data } = await axios.post('/api/users/login', credentials);
+      localStorage.setItem('user', JSON.stringify(data));
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to login'
+      );
+    }
+  }
+);
+
+// Register user
+export const register = createAsyncThunk(
+  'auth/register',
+  async (credentials: RegisterCredentials, { rejectWithValue }) => {
+    try {
+      const { data } = await axios.post('/api/users/register', credentials);
+      localStorage.setItem('user', JSON.stringify(data));
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to register'
+      );
+    }
+  }
+);
+
+// Logout user
+export const logout = createAsyncThunk('auth/logout', async () => {
+  localStorage.removeItem('user');
+  return null;
+});
+
+const authSlice = createSlice({
+  name: 'auth',
+  initialState,
+  reducers: {
+    resetError: (state) => {
+      state.error = null;
+    }
+  },
+  extraReducers: (builder) => {
+    builder
+      // Login cases
+      .addCase(login.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(login.fulfilled, (state, action: PayloadAction<User>) => {
+        state.isLoading = false;
+        state.user = action.payload;
+      })
+      .addCase(login.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      })
+      // Register cases
+      .addCase(register.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(register.fulfilled, (state, action: PayloadAction<User>) => {
+        state.isLoading = false;
+        state.user = action.payload;
+      })
+      .addCase(register.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      })
+      // Logout cases
+      .addCase(logout.fulfilled, (state) => {
+        state.user = null;
+      });
+  }
+});
+
+export const { resetError } = authSlice.actions;
+export default authSlice.reducer;
+
+// client/src/redux/slices/recommendationSlice.ts
+import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import axios from 'axios';
+import { RootState } from '../store';
+
+interface User {
+  _id: string;
+  username: string;
+  profilePicture: string;
+}
+
+interface Recommendation {
+  _id: string;
+  userId: User;
+  title: string;
+  content: string;
+  audioUrl: string;
+  audioDuration: number;
+  categories: string[];
+  sentiment: {
+    polarity: number;
+    subjectivity: number;
+  };
+  keywords: string[];
+  likes: number;
+  views: number;
+  createdAt: string;
+}
+
+interface RecommendationState {
+  feed: Recommendation[];
+  currentRecommendation: Recommendation | null;
+  pagination: {
+    page: number;
+    pages: number;
+    total: number;
+  };
+  isLoading: boolean;
+  error: string | null;
+  selectedCategory: string;
+}
+
+interface FeedResponse {
+  data: Recommendation[];
+  pagination: {
+    page: number;
+    pages: number;
+    total: number;
+  };
+}
+
+interface FeedParams {
+  page?: number;
+  category?: string;
+}
+
+const initialState: RecommendationState = {
+  feed: [],
+  currentRecommendation: null,
+  pagination: {
+    page: 1,
+    pages: 1,
+    total: 0
+  },
+  isLoading: false,
+  error: null,
+  selectedCategory: 'all'
+};
+
+// Get recommendations feed
+export const fetchFeed = createAsyncThunk<
+  FeedResponse,
+  FeedParams,
+  { state: RootState }
+>(
+  'recommendations/fetchFeed',
+  async ({ page = 1, category = 'all' }, { getState, rejectWithValue }) => {
+    try {
+      const { auth } = getState();
+      const config = auth.user 
+        ? { headers: { Authorization: `Bearer ${auth.user.token}` } }
+        : {};
+
+      let url = `/api/recommendations?page=${page}`;
+      if (category !== 'all') {
+        url += `&category=${category}`;
+      }
+
+      const { data } = await axios.get<FeedResponse>(url, config);
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to fetch recommendations'
+      );
+    }
+  }
+);
+
+// Get recommendation by ID
+export const fetchRecommendationById = createAsyncThunk<
+  Recommendation,
+  string,
+  { state: RootState }
+>(
+  'recommendations/fetchById',
+  async (id, { getState, rejectWithValue }) => {
+    try {
+      const { auth } = getState();
+      const config = auth.user 
+        ? { headers: { Authorization: `Bearer ${auth.user.token}` } }
+        : {};
+
+      const { data } = await axios.get<Recommendation>(
+        `/api/recommendations/${id}`,
+        config
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to fetch recommendation'
+      );
+    }
+  }
+);
+
+// Create recommendation
+export const createRecommendation = createAsyncThunk<
+  Recommendation,
+  FormData,
+  { state: RootState }
+>(
+  'recommendations/create',
+  async (formData, { getState, rejectWithValue }) => {
+    try {
+      const { auth } = getState();
+      
+      if (!auth.user) {
+        return rejectWithValue('Not authenticated');
+      }
+
+      const config = {
+        headers: { 
+          Authorization: `Bearer ${auth.user.token}`,
+          'Content-Type': 'multipart/form-data'
+        }
+      };
+
+      const { data } = await axios.post<Recommendation>(
+        '/api/recommendations',
+        formData,
+        config
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to create recommendation'
+      );
+    }
+  }
+);
+
+// Like recommendation
+export const likeRecommendation = createAsyncThunk<
+  { likes: number, id: string },
+  string,
+  { state: RootState }
+>(
+  'recommendations/like',
+  async (id, { getState, rejectWithValue }) => {
+    try {
+      const { auth } = getState();
+      
+      if (!auth.user) {
+        return rejectWithValue('Not authenticated');
+      }
+
+      const config = {
+        headers: { 
+          Authorization: `Bearer ${auth.user.token}`
+        }
+      };
+
+      const { data } = await axios.post<{ likes: number }>(
+        `/api/recommendations/${id}/like`,
+        {},
+        config
+      );
+      return { likes: data.likes, id };
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to like recommendation'
+      );
+    }
+  }
+);
+
+const recommendationSlice = createSlice({
+  name: 'recommendations',
+  initialState,
+  reducers: {
+    resetRecommendations: (state) => {
+      state.feed = [];
+      state.pagination.page = 1;
+    },
+    setCategory: (state, action: PayloadAction<string>) => {
+      state.selectedCategory = action.payload;
+      state.feed = [];
+      state.pagination.page = 1;
+    },
+    clearCurrentRecommendation: (state) => {
+      state.currentRecommendation = null;
+    }
+  },
+  extraReducers: (builder) => {
+    builder
+      // Fetch feed cases
+      .addCase(fetchFeed.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(fetchFeed.fulfilled, (state, action) => {
+        state.isLoading = false;
+        // If it's page 1 or we're changing categories, replace the feed
+        if (state.pagination.page === 1) {
+          state.feed = action.payload.data;
+        } else {
+          // Otherwise, append to the feed
+          state.feed = [...state.feed, ...action.payload.data];
+        }
+        state.pagination = action.payload.pagination;
+      })
+      .addCase(fetchFeed.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      })
+      // Fetch by ID cases
+      .addCase(fetchRecommendationById.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(fetchRecommendationById.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.currentRecommendation = action.payload;
+      })
+      .addCase(fetchRecommendationById.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      })
+      // Create recommendation cases
+      .addCase(createRecommendation.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(createRecommendation.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.feed = [action.payload, ...state.feed];
+        state.pagination.total += 1;
+      })
+      .addCase(createRecommendation.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      })
+      // Like recommendation cases
+      .addCase(likeRecommendation.fulfilled, (state, action) => {
+        // Update likes in feed
+        const recommendation = state.feed.find(r => r._id === action.payload.id);
+        if (recommendation) {
+          recommendation.likes = action.payload.likes;
+        }
+        
+        // Update current recommendation if it's the one being liked
+        if (state.currentRecommendation && state.currentRecommendation._id === action.payload.id) {
+          state.currentRecommendation.likes = action.payload.likes;
+        }
+      });
+  }
+});
+
+export const { 
+  resetRecommendations, 
+  setCategory,
+  clearCurrentRecommendation
+} = recommendationSlice.actions;
+export default recommendationSlice.reducer;
+
+// client/src/redux/slices/userSlice.ts
+import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import axios from 'axios';
+import { RootState } from '../store';
+
+interface RecommendationSummary {
+  _id: string;
+  title: string;
+  createdAt: string;
+  views: number;
+  likes: number;
+}
+
+interface UserProfile {
+  _id: string;
+  username: string;
+  profilePicture: string;
+  bio: string;
+  listeners: string[];
+  listening: string[];
+  badges: string[];
+  recommendations: RecommendationSummary[];
+  streak: number;
+}
+
+interface UserState {
+  profile: UserProfile | null;
+  isLoading: boolean;
+  error: string | null;
+}
+
+const initialState: UserState = {
+  profile: null,
+  isLoading: false,
+  error: null
+};
+
+// Get user profile
+export const fetchUserProfile = createAsyncThunk<
+  UserProfile,
+  string,
+  { state: RootState }
+>(
+  'user/fetchProfile',
+  async (username, { getState, rejectWithValue }) => {
+    try {
+      const { auth } = getState();
+      const config = auth.user 
+        ? { headers: { Authorization: `Bearer ${auth.user.token}` } }
+        : {};
+
+      const { data } = await axios.get<UserProfile>(
+        `/api/users/profile/${username}`,
+        config
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to fetch user profile'
+      );
+    }
+  }
+);
+
+// Listen to a user
+export const listenToUser = createAsyncThunk<
+  { message: string },
+  string,
+  { state: RootState }
+>(
+  'user/listen',
+  async (userId, { getState, rejectWithValue }) => {
+    try {
+      const { auth } = getState();
+      
+      if (!auth.user) {
+        return rejectWithValue('Not authenticated');
+      }
+
+      const config = {
+        headers: { 
+          Authorization: `Bearer ${auth.user.token}`
+        }
+      };
+
+      const { data } = await axios.post<{ message: string }>(
+        `/api/users/listen/${userId}`,
+        {},
+        config
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to listen to user'
+      );
+    }
+  }
+);
+
+// Mute a user
+export const muteUser = createAsyncThunk<
+  { message: string },
+  string,
+  { state: RootState }
+>(
+  'user/mute',
+  async (userId, { getState, rejectWithValue }) => {
+    try {
+      const { auth } = getState();
+      
+      if (!auth.user) {
+        return rejectWithValue('Not authenticated');
+      }
+
+      const config = {
+        headers: { 
+          Authorization: `Bearer ${auth.user.token}`
+        }
+      };
+
+      const { data } = await axios.post<{ message: string }>(
+        `/api/users/mute/${userId}`,
+        {},
+        config
+      );
+      return data;
+    } catch (error: any) {
+      return rejectWithValue(
+        error.response?.data?.message || 'Failed to mute user'
+      );
+    }
+  }
+);
+
+const userSlice = createSlice({
+  name: 'user',
+  initialState,
+  reducers: {
+    clearProfile: (state) => {
+      state.profile = null;
+    }
+  },
+  extraReducers: (builder) => {
+    builder
+      // Fetch profile cases
+      .addCase(fetchUserProfile.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(fetchUserProfile.fulfilled, (state, action: PayloadAction<UserProfile>) => {
+        state.isLoading = false;
+        state.profile = action.payload;
+      })
+      .addCase(fetchUserProfile.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      })
+      // Listen to user cases - we'll need to refetch the profile after this
+      .addCase(listenToUser.fulfilled, (state) => {
+        // We'll handle this by fetching the updated profile
+      })
+      // Mute user cases - we'll need to refetch the profile after this
+      .addCase(muteUser.fulfilled, (state) => {
+        // We'll handle this by fetching the updated profile
+      });
+  }
+});
+
+export const { clearProfile } = userSlice.actions;
+export default userSlice.reducer;
+
+// client/src/redux/slices/notificationSlice.ts
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
+interface Notification {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
+  timestamp: number;
+}
+
+interface NotificationState {
+  notifications: Notification[];
+  unreadCount: number;
+}
+
+const initialState: NotificationState = {
+  notifications: [],
+  unreadCount: 0
+};
+
+const notificationSlice = createSlice({
+  name: 'notifications',
+  initialState,
+  reducers: {
+    addNotification: (state, action: PayloadAction<Omit<Notification, 'id' | 'timestamp'>>) => {
+      const id = Date.now().toString();
+      state.notifications.unshift({
+        ...action.payload,
+        id,
+        timestamp: Date.now()
+      });
+      state.unreadCount += 1;
+    },
+    removeNotification: (state, action: PayloadAction<string>) => {
+      state.notifications = state.notifications.filter(
+        (notification) => notification.id !== action.payload
+      );
+    },
+    markAllAsRead: (state) => {
+      state.unreadCount = 0;
+    },
+    clearNotifications: (state) => {
+      state.notifications = [];
+      state.unreadCount = 0;
+    }
+  }
+});
+
+export const {
+  addNotification,
+  removeNotification,
+  markAllAsRead,
+  clearNotifications
+} = notificationSlice.actions;
+
+export default notificationSlice.reducer;
+
+// client/src/App.tsx
+import React, { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { useSelector, useDispatch } from 'react-redux';
+import { RootState, AppDispatch } from './redux/store';
+import { addNotification } from './redux/slices/notificationSlice';
+import WebSocket from 'websocket';
+
+// Layout components
+import Layout from './components/Layout';
+
+// Page components
+import Home from './pages/Home';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import Profile from './pages/Profile';
+import RecommendationDetail from './pages/RecommendationDetail';
+import CreateRecommendation from './pages/CreateRecommendation';
+import NotFound from './pages/NotFound';
+
+// Private route component
+import PrivateRoute from './components/PrivateRoute';
+
+// WebSocket connection
+let client: WebSocket.client | null = null;
+
+const App: React.FC = () => {
+  const dispatch = useDispatch<AppDispatch>();
+  const { user } = useSelector((state: RootState) => state.auth);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    client = new WebSocket.client();
+
+    client.on('connectFailed', (error) => {
+      console.error('Connect Error:', error.toString());
+    });
+
+    client.on('connect', (connection) => {
+      console.log('WebSocket Client Connected');
+
+      connection.on('error', (error) => {
+        console.error('Connection Error:', error.toString());
+      });
+
+      connection.on('close', () => {
+        console.log('WebSocket Connection Closed');
+      });
+
+      connection.on('message', (message) => {
+        if (message.type === 'utf8') {
+          const data = JSON.parse(message.utf8Data);
+          
+          // Handle different message types
+          if (data.type === 'notification') {
+            dispatch(addNotification({
+              message: data.message,
+              type: data.notificationType
+            }));
+          }
+        }
+      });
+
+      // Join feed room for real-time updates
+      connection.send(JSON.stringify({ action: 'join-feed' }));
+
+      // Join user room if logged in
+      if (user) {
+        connection.send(JSON.stringify({ 
+          action: 'join-user',
+          username: user.username 
+        }));
+      }
+    });
+
+    // Connect to WebSocket server
+    client.connect(`${process.env.REACT_APP_WS_URL || 'ws://localhost:5000'}`);
+
+    // Cleanup on unmount
+    return () => {
+      if (client && client.connection) {
+        client.connection.close();
+      }
+    };
+  }, [dispatch, user]);
+
+  return (
+    <Router>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route path="/profile/:username" element={<Profile />} />
+          <Route path="/recommendations/:id" element={<RecommendationDetail />} />
+          <Route 
+            path="/create" 
+            element={
+              <PrivateRoute>
+                <CreateRecommendation />
+              </PrivateRoute>
+            } 
+          />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </Layout>
+    </Router>
+  );
+};
+
+export default App;
+
+// client/src/components/Layout.tsx
+import React from 'react';
+import { useSelector } from 'react-redux';
+import { RootState } from '../redux/store';
+import Header from './Header';
+import Footer from './Footer';
+import NotificationContainer from './NotificationContainer';
+import QuickTips from './QuickTips';
+
+interface LayoutProps {
+  children: React.ReactNode;
+}
+
+const Layout: React.FC<LayoutProps> = ({ children }) => {
+  const { user } = useSelector((state: RootState) => state.auth);
+  const [showTips, setShowTips] = React.useState(true);
+
+  return (
+    <div className="flex flex-col min-h-screen">
+      <Header />
+      
+      <main className
+
 // client/src/types/index.ts
 export interface User {
   id: string;
@@ -1851,4 +3615,1128 @@ const ProfilePage: React.FC = () => {
               
               <button 
                 className="share-profile-
+
+import argparse
+import os
+import sys
+import uuid
+from datetime import datetime
+import json
+import readline  # For better input handling
+
+# Assuming the Conversation, save_conversation, get_conversation, etc. are defined as shown in the claude.murmur.MVP file
+
+class MurmurCLI:
+    def __init__(self):
+        self.current_conversation = None
+        self.llm = None
+        self.config = self._load_config()
+    
+    def _load_config(self):
+        """Load configuration from file or environment variables"""
+        config = {
+            "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
+            "default_model": os.environ.get("MURMUR_DEFAULT_MODEL", "claude-3-opus-20240229"),
+            "history_dir": os.path.expanduser("~/.murmur/history")
+        }
+        
+        config_path = os.path.expanduser("~/.murmur/config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    file_config = json.load(f)
+                    config.update(file_config)
+            except Exception as e:
+                print(f"Error loading config: {e}")
+        
+        return config
+    
+    def _save_config(self):
+        """Save current configuration to file"""
+        config_path = os.path.expanduser("~/.murmur/config.json")
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        
+        with open(config_path, 'w') as f:
+            json.dump(self.config, f, indent=2)
+    
+    def _init_llm(self, model=None):
+        """Initialize the appropriate LLM client based on model"""
+        if not model:
+            model = self.config["default_model"]
+        
+        if "claude" in model.lower():
+            if not self.config.get("anthropic_api_key"):
+                print("Error: Anthropic API key not set. Please run 'murmur config --anthropic-key YOUR_KEY'")
+                sys.exit(1)
+            self.llm = ClaudeLLM(api_key=self.config["anthropic_api_key"], model=model)
+        elif "gpt" in model.lower():
+            if not self.config.get("openai_api_key"):
+                print("Error: OpenAI API key not set. Please run 'murmur config --openai-key YOUR_KEY'")
+                sys.exit(1)
+            # Implement OpenAI LLM class similar to ClaudeLLM
+            self.llm = OpenAILLM(api_key=self.config["openai_api_key"], model=model)
+        else:
+            print(f"Unsupported model: {model}")
+            sys.exit(1)
+        
+        return self.llm
+    
+    def create_conversation(self, title=None, system_prompt=None, model=None):
+        """Create a new conversation"""
+        if not title:
+            title = f"Conversation {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        
+        if not system_prompt:
+            system_prompt = "You are Claude, an AI assistant created by Anthropic to be helpful, harmless, and honest."
+        
+        if not model:
+            model = self.config["default_model"]
+        
+        self.current_conversation = Conversation(
+            id=str(uuid.uuid4()),
+            title=title,
+            system_prompt=system_prompt,
+            messages=[],
+            model=model,
+            created_at=generate_timestamp(),
+            updated_at=generate_timestamp()
+        )
+        
+        save_conversation(self.current_conversation)
+        self._init_llm(model)
+        
+        print(f"Created new conversation: {title}")
+        return self.current_conversation
+    
+    def list_conversations(self):
+        """List all available conversations"""
+        conversations = get_conversations()
+        
+        if not conversations:
+            print("No conversations found.")
+            return
+        
+        print("\nAvailable conversations:")
+        print("-----------------------")
+        for idx, conv in enumerate(conversations, 1):
+            print(f"{idx}. {conv.title} (ID: {conv.id[:8]}...)")
+            print(f"   Created: {conv.created_at}")
+            print(f"   Model: {conv.model}")
+            print(f"   Messages: {len(conv.messages)}")
+            print()
+        
+        return conversations
+    
+    def load_conversation(self, conversation_id):
+        """Load an existing conversation"""
+        try:
+            conversation = get_conversation(conversation_id)
+            self.current_conversation = conversation
+            self._init_llm(conversation.model)
+            print(f"Loaded conversation: {conversation.title}")
+            return conversation
+        except Exception as e:
+            print(f"Error loading conversation: {e}")
+            return None
+    
+    def send_message(self, message):
+        """Send a message to the current conversation and get a response"""
+        if not self.current_conversation:
+            print("No active conversation. Create or load a conversation first.")
+            return
+        
+        if not self.llm:
+            self._init_llm(self.current_conversation.model)
+        
+        try:
+            # Add user message to conversation
+            self.current_conversation.messages.append({
+                "role": "user",
+                "content": message,
+                "timestamp": generate_timestamp()
+            })
+            
+            # Get response from LLM
+            response = self.llm.generate_response(self.current_conversation, message)
+            
+            # Add assistant response to conversation
+            self.current_conversation.messages.append({
+                "role": "assistant",
+                "content": response,
+                "timestamp": generate_timestamp()
+            })
+            
+            # Update and save conversation
+            self.current_conversation.updated_at = generate_timestamp()
+            save_conversation(self.current_conversation)
+            
+            # Display the response
+            print("\n" + response + "\n")
+            
+        except Exception as e:
+            print(f"Error: {e}")
+    
+    def interactive_mode(self):
+        """Start an interactive session with the current conversation"""
+        if not self.current_conversation:
+            print("No active conversation. Creating a new one...")
+            self.create_conversation()
+        
+        print(f"\nInteractive mode - {self.current_conversation.title}")
+        print(f"Model: {self.current_conversation.model}")
+        print("Type 'exit', 'quit', or press Ctrl+C to end the session")
+        print("Type '/help' for more commands")
+        print("-" * 50)
+        
+        while True:
+            try:
+                user_input = input("\n> ")
+                
+                if user_input.lower() in ["exit", "quit"]:
+                    break
+                
+                # Handle special commands
+                if user_input.startswith("/"):
+                    self._handle_command(user_input)
+                    continue
+                
+                # Process regular message
+                self.send_message(user_input)
+                
+            except KeyboardInterrupt:
+                print("\nExiting interactive mode...")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+    
+    def _handle_command(self, command):
+        """Handle special commands in interactive mode"""
+        cmd = command.strip().lower()
+        
+        if cmd == "/help":
+            print("\nAvailable commands:")
+            print("  /help           - Show this help message")
+            print("  /new            - Create a new conversation")
+            print("  /list           - List available conversations")
+            print("  /load <id>      - Load a conversation by ID")
+            print("  /title <text>   - Set conversation title")
+            print("  /system <text>  - Set system prompt")
+            print("  /model <model>  - Change the model")
+            print("  /history        - Show conversation history")
+            print("  exit or quit    - Exit interactive mode")
+        
+        elif cmd == "/new":
+            title = input("Title (optional): ")
+            system = input("System prompt (optional): ")
+            model = input(f"Model (default: {self.config['default_model']}): ")
+            
+            self.create_conversation(
+                title=title if title else None,
+                system_prompt=system if system else None,
+                model=model if model else None
+            )
+        
+        elif cmd == "/list":
+            self.list_conversations()
+        
+        elif cmd.startswith("/load "):
+            conv_id = cmd.split("/load ")[1].strip()
+            self.load_conversation(conv_id)
+        
+        elif cmd.startswith("/title "):
+            new_title = cmd.split("/title ")[1].strip()
+            if self.current_conversation:
+                self.current_conversation.title = new_title
+                save_conversation(self.current_conversation)
+                print(f"Title updated: {new_title}")
+        
+        elif cmd.startswith("/system "):
+            new_system = cmd.split("/system ")[1].strip()
+            if self.current_conversation:
+                self.current_conversation.system_prompt = new_system
+                save_conversation(self.current_conversation)
+                print("System prompt updated")
+        
+        elif cmd.startswith("/model "):
+            new_model = cmd.split("/model ")[1].strip()
+            if self.current_conversation:
+                self.current_conversation.model = new_model
+                self._init_llm(new_model)
+                save_conversation(self.current_conversation)
+                print(f"Model changed to {new_model}")
+        
+        elif cmd == "/history":
+            if self.current_conversation and self.current_conversation.messages:
+                for msg in self.current_conversation.messages:
+                    role = msg["role"].upper()
+                    print(f"\n[{role}]: {msg['content']}")
+            else:
+                print("No messages in current conversation")
+        
+        else:
+            print(f"Unknown command: {command}. Type /help for available commands.")
+
+    def configure(self, anthropic_key=None, openai_key=None, default_model=None):
+        """Update configuration settings"""
+        if anthropic_key:
+            self.config["anthropic_api_key"] = anthropic_key
+        
+        if openai_key:
+            self.config["openai_api_key"] = openai_key
+        
+        if default_model:
+            self.config["default_model"] = default_model
+        
+        self._save_config()
+        print("Configuration updated")
+
+
+def main():
+    """Main entry point for the Murmur CLI"""
+    parser = argparse.ArgumentParser(description="Murmur - A CLI for conversations with LLMs")
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    
+    # New conversation command
+    new_parser = subparsers.add_parser("new", help="Create a new conversation")
+    new_parser.add_argument("--title", "-t", help="Title for the conversation")
+    new_parser.add_argument("--system", "-s", help="System prompt for the conversation")
+    new_parser.add_argument("--model", "-m", help="Model to use")
+    
+    # List conversations command
+    subparsers.add_parser("list", help="List available conversations")
+    
+    # Load conversation command
+    load_parser = subparsers.add_parser("load", help="Load an existing conversation")
+    load_parser.add_argument("id", help="ID of the conversation to load")
+    
+    # Send message command
+    send_parser = subparsers.add_parser("send", help="Send a message to a conversation")
+    send_parser.add_argument("--id", help="ID of the conversation to use")
+    send_parser.add_argument("message", nargs="?", help="Message to send")
+    
+    # Interactive mode command
+    interactive_parser = subparsers.add_parser("chat", help="Start interactive chat mode")
+    interactive_parser.add_argument("--id", help="ID of the conversation to use")
+    
+    # Configuration command
+    config_parser = subparsers.add_parser("config", help="Update configuration settings")
+    config_parser.add_argument("--anthropic-key", help="Set Anthropic API key")
+    config_parser.add_argument("--openai-key", help="Set OpenAI API key")
+    config_parser.add_argument("--default-model", help="Set default model")
+    
+    args = parser.parse_args()
+    
+    # Initialize CLI
+    cli = MurmurCLI()
+    
+    # Process commands
+    if args.command == "new":
+        cli.create_conversation(
+            title=args.title,
+            system_prompt=args.system,
+            model=args.model
+        )
+    
+    elif args.command == "list":
+        cli.list_conversations()
+    
+    elif args.command == "load":
+        cli.load_conversation(args.id)
+    
+    elif args.command == "send":
+        if args.id:
+            cli.load_conversation(args.id)
+        
+        if not cli.current_conversation:
+            print("No active conversation. Use --id to specify a conversation.")
+            sys.exit(1)
+        
+        if args.message:
+            cli.send_message(args.message)
+        else:
+            # Read from stdin if no message provided
+            message = sys.stdin.read().strip()
+            if message:
+                cli.send_message(message)
+    
+    elif args.command == "chat":
+        if args.id:
+            cli.load_conversation(args.id)
+        
+        cli.interactive_mode()
+    
+    elif args.command == "config":
+        cli.configure(
+            anthropic_key=args.anthropic_key,
+            openai_key=args.openai_key,
+            default_model=args.default_model
+        )
+    
+    else:
+        # Default to interactive mode if no command specified
+        cli.interactive_mode()
+
+
+if __name__ == "__main__":
+    main()
+
+// src/components/Layout.jsx
+import React from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Home, User, Bell, MessageSquare, Settings, LogOut } from 'lucide-react';
+
+const Layout = ({ children }) => {
+  const location = useLocation();
+  
+  const isActive = (path) => {
+    return location.pathname === path;
+  };
+
+  return (
+    <div className="flex min-h-screen bg-gray-100">
+      {/* Sidebar */}
+      <aside className="w-16 md:w-64 bg-white shadow-md">
+        <div className="h-16 flex items-center justify-center md:justify-start px-4 border-b">
+          <Link to="/" className="font-bold text-xl text-blue-600">
+            <span className="hidden md:inline">Murmur</span>
+            <span className="md:hidden">M</span>
+          </Link>
+        </div>
+        <nav className="p-2">
+          <ul className="space-y-2">
+            <li>
+              <Link 
+                to="/" 
+                className={`flex items-center p-2 rounded-lg ${
+                  isActive('/') 
+                    ? 'bg-blue-100 text-blue-600' 
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <Home className="h-5 w-5" />
+                <span className="hidden md:inline ml-3">Home</span>
+              </Link>
+            </li>
+            <li>
+              <Link 
+                to="/profile" 
+                className={`flex items-center p-2 rounded-lg ${
+                  isActive('/profile') 
+                    ? 'bg-blue-100 text-blue-600' 
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <User className="h-5 w-5" />
+                <span className="hidden md:inline ml-3">Profile</span>
+              </Link>
+            </li>
+            <li>
+              <Link 
+                to="/notifications" 
+                className={`flex items-center p-2 rounded-lg ${
+                  isActive('/notifications') 
+                    ? 'bg-blue-100 text-blue-600' 
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <Bell className="h-5 w-5" />
+                <span className="hidden md:inline ml-3">Notifications</span>
+              </Link>
+            </li>
+            <li>
+              <Link 
+                to="/messages" 
+                className={`flex items-center p-2 rounded-lg ${
+                  isActive('/messages') 
+                    ? 'bg-blue-100 text-blue-600' 
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <MessageSquare className="h-5 w-5" />
+                <span className="hidden md:inline ml-3">Messages</span>
+              </Link>
+            </li>
+            <li>
+              <Link 
+                to="/settings" 
+                className={`flex items-center p-2 rounded-lg ${
+                  isActive('/settings') 
+                    ? 'bg-blue-100 text-blue-600' 
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <Settings className="h-5 w-5" />
+                <span className="hidden md:inline ml-3">Settings</span>
+              </Link>
+            </li>
+          </ul>
+        </nav>
+        <div className="absolute bottom-0 w-16 md:w-64 p-4 border-t">
+          <button className="flex items-center w-full p-2 rounded-lg text-gray-700 hover:bg-gray-100">
+            <LogOut className="h-5 w-5" />
+            <span className="hidden md:inline ml-3">Logout</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <main className="flex-1">
+        <header className="h-16 bg-white shadow-sm flex items-center px-4">
+          <div className="max-w-7xl w-full mx-auto">
+            <h1 className="text-lg font-semibold text-gray-900">
+              {location.pathname === '/' && 'Home'}
+              {location.pathname === '/profile' && 'Profile'}
+              {location.pathname === '/notifications' && 'Notifications'}
+              {location.pathname === '/messages' && 'Messages'}
+              {location.pathname === '/settings' && 'Settings'}
+            </h1>
+          </div>
+        </header>
+        <div className="p-4">
+          <div className="max-w-3xl mx-auto">
+            {children}
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default Layout;
+
+// src/App.jsx
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import Layout from './components/Layout';
+import Home from './pages/Home';
+import Profile from './pages/Profile';
+import Notifications from './pages/Notifications';
+import Messages from './pages/Messages';
+import Settings from './pages/Settings';
+import NotFound from './pages/NotFound';
+
+function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={
+          <Layout>
+            <Home />
+          </Layout>
+        } />
+        <Route path="/profile" element={
+          <Layout>
+            <Profile />
+          </Layout>
+        } />
+        <Route path="/notifications" element={
+          <Layout>
+            <Notifications />
+          </Layout>
+        } />
+        <Route path="/messages" element={
+          <Layout>
+            <Messages />
+          </Layout>
+        } />
+        <Route path="/settings" element={
+          <Layout>
+            <Settings />
+          </Layout>
+        } />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </Router>
+  );
+}
+
+export default App;
+
+// src/pages/Home.jsx
+import React from 'react';
+import PostForm from '../components/PostForm';
+import PostList from '../components/PostList';
+
+const Home = () => {
+  return (
+    <div className="space-y-6">
+      <PostForm />
+      <PostList />
+    </div>
+  );
+};
+
+export default Home;
+
+// src/pages/Profile.jsx
+import React from 'react';
+import UserProfile from '../components/UserProfile';
+import PostList from '../components/PostList';
+
+const Profile = () => {
+  return (
+    <div className="space-y-6">
+      <UserProfile />
+      <h2 className="text-xl font-semibold mt-6 mb-4">Your Posts</h2>
+      <PostList userOnly={true} />
+    </div>
+  );
+};
+
+export default Profile;
+
+// src/pages/Notifications.jsx
+import React from 'react';
+import NotificationList from '../components/NotificationList';
+
+const Notifications = () => {
+  return (
+    <div>
+      <NotificationList />
+    </div>
+  );
+};
+
+export default Notifications;
+
+// src/pages/Messages.jsx
+import React from 'react';
+import MessageList from '../components/MessageList';
+
+const Messages = () => {
+  return (
+    <div>
+      <MessageList />
+    </div>
+  );
+};
+
+export default Messages;
+
+// src/pages/Settings.jsx
+import React from 'react';
+import UserSettings from '../components/UserSettings';
+
+const Settings = () => {
+  return (
+    <div>
+      <UserSettings />
+    </div>
+  );
+};
+
+export default Settings;
+
+// src/pages/NotFound.jsx
+import React from 'react';
+import { Link } from 'react-router-dom';
+
+const NotFound = () => {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+      <div className="text-center">
+        <h1 className="text-6xl font-bold text-gray-800">404</h1>
+        <p className="text-xl mt-4 mb-8 text-gray-600">Page not found</p>
+        <Link to="/" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+          Go back home
+        </Link>
+      </div>
+    </div>
+  );
+};
+
+export default NotFound;
+
+// src/components/PostForm.jsx
+import React, { useState } from 'react';
+
+const PostForm = () => {
+  const [content, setContent] = useState('');
+  
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    // TODO: Implement post creation functionality
+    console.log('Creating post:', content);
+    setContent('');
+  };
+
+  return (
+    <div className="bg-white p-4 rounded-lg shadow">
+      <form onSubmit={handleSubmit}>
+        <textarea
+          className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="What's happening?"
+          rows="3"
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          required
+        />
+        <div className="flex justify-end mt-2">
+          <button
+            type="submit"
+            className="px-4 py-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 font-medium"
+            disabled={!content.trim()}
+          >
+            Murmur
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+export default PostForm;
+
+// src/components/PostList.jsx
+import React from 'react';
+import PostItem from './PostItem';
+
+const PostList = ({ userOnly = false }) => {
+  // Mock data - would come from API in real implementation
+  const posts = [
+    {
+      id: 1,
+      content: "Just launched Murmur! Excited to see where this goes.",
+      user: {
+        id: 1,
+        name: "John Doe",
+        username: "johndoe",
+        avatar: "/api/placeholder/40/40"
+      },
+      createdAt: "2025-03-04T10:30:00Z",
+      likes: 5,
+      comments: 2
+    },
+    {
+      id: 2,
+      content: "Working on a new feature for Murmur today. Stay tuned!",
+      user: {
+        id: 2,
+        name: "Jane Smith",
+        username: "janesmith",
+        avatar: "/api/placeholder/40/40"
+      },
+      createdAt: "2025-03-04T09:15:00Z",
+      likes: 10,
+      comments: 3
+    },
+    {
+      id: 3,
+      content: "Just had a great brainstorming session for our next project!",
+      user: {
+        id: 1,
+        name: "John Doe",
+        username: "johndoe",
+        avatar: "/api/placeholder/40/40"
+      },
+      createdAt: "2025-03-03T14:45:00Z",
+      likes: 8,
+      comments: 1
+    }
+  ];
+
+  // Filter posts if userOnly is true (for profile page)
+  const filteredPosts = userOnly 
+    ? posts.filter(post => post.user.id === 1) // Assuming current user ID is 1
+    : posts;
+
+  return (
+    <div className="space-y-4">
+      {filteredPosts.length > 0 ? (
+        filteredPosts.map(post => (
+          <PostItem key={post.id} post={post} />
+        ))
+      ) : (
+        <div className="bg-white p-6 rounded-lg shadow text-center">
+          <p className="text-gray-500">No posts to display</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default PostList;
+
+// src/components/PostItem.jsx
+import React from 'react';
+import { Heart, MessageCircle, Share } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+
+const PostItem = ({ post }) => {
+  return (
+    <div className="bg-white p-4 rounded-lg shadow">
+      <div className="flex items-start space-x-3">
+        <img 
+          src={post.user.avatar} 
+          alt={post.user.name} 
+          className="w-10 h-10 rounded-full"
+        />
+        <div className="flex-1">
+          <div className="flex items-center space-x-1">
+            <span className="font-semibold">{post.user.name}</span>
+            <span className="text-gray-500">@{post.user.username}</span>
+            <span className="text-gray-500">·</span>
+            <span className="text-gray-500">
+              {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true })}
+            </span>
+          </div>
+          <p className="mt-2 text-gray-900">{post.content}</p>
+          <div className="flex items-center mt-4 space-x-6">
+            <button className="flex items-center text-gray-500 hover:text-red-500">
+              <Heart className="w-4 h-4 mr-1" />
+              <span>{post.likes}</span>
+            </button>
+            <button className="flex items-center text-gray-500 hover:text-blue-500">
+              <MessageCircle className="w-4 h-4 mr-1" />
+              <span>{post.comments}</span>
+            </button>
+            <button className="flex items-center text-gray-500 hover:text-green-500">
+              <Share className="w-4 h-4 mr-1" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default PostItem;
+
+// src/components/UserProfile.jsx
+import React from 'react';
+
+const UserProfile = () => {
+  // Mock user data - would come from API in real implementation
+  const user = {
+    id: 1,
+    name: "John Doe",
+    username: "johndoe",
+    avatar: "/api/placeholder/80/80",
+    bio: "Frontend developer and tech enthusiast. Creator of Murmur.",
+    following: 125,
+    followers: 438,
+    joinedDate: "January 2025"
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="bg-blue-600 h-32"></div>
+      <div className="p-4">
+        <div className="flex justify-between">
+          <img 
+            src={user.avatar} 
+            alt={user.name} 
+            className="w-20 h-20 rounded-full border-4 border-white -mt-12"
+          />
+          <button className="px-4 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 font-medium">
+            Edit Profile
+          </button>
+        </div>
+        
+        <div className="mt-2">
+          <h1 className="text-xl font-bold">{user.name}</h1>
+          <p className="text-gray-500">@{user.username}</p>
+          
+          <p className="mt-3 text-gray-700">{user.bio}</p>
+          
+          <p className="mt-3 text-gray-500">
+            Joined {user.joinedDate}
+          </p>
+          
+          <div className="mt-3 flex space-x-4">
+            <span>
+              <span className="font-bold">{user.following}</span> 
+              <span className="text-gray-500"> Following</span>
+            </span>
+            <span>
+              <span className="font-bold">{user.followers}</span> 
+              <span className="text-gray-500"> Followers</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default UserProfile;
+
+// src/components/NotificationList.jsx
+import React from 'react';
+
+const NotificationList = () => {
+  // Mock notification data - would come from API in real implementation
+  const notifications = [
+    {
+      id: 1,
+      type: 'like',
+      user: {
+        name: "Jane Smith",
+        username: "janesmith",
+        avatar: "/api/placeholder/40/40"
+      },
+      content: "liked your post",
+      time: "15m ago"
+    },
+    {
+      id: 2,
+      type: 'follow',
+      user: {
+        name: "Alex Johnson",
+        username: "alexj",
+        avatar: "/api/placeholder/40/40"
+      },
+      content: "followed you",
+      time: "2h ago"
+    },
+    {
+      id: 3,
+      type: 'comment',
+      user: {
+        name: "Sarah Williams",
+        username: "sarahw",
+        avatar: "/api/placeholder/40/40"
+      },
+      content: "commented on your post",
+      time: "1d ago"
+    }
+  ];
+
+  return (
+    <div className="bg-white rounded-lg shadow">
+      {notifications.length > 0 ? (
+        <ul className="divide-y">
+          {notifications.map(notification => (
+            <li key={notification.id} className="p-4 hover:bg-gray-50 cursor-pointer">
+              <div className="flex items-start space-x-3">
+                <img 
+                  src={notification.user.avatar} 
+                  alt={notification.user.name} 
+                  className="w-10 h-10 rounded-full"
+                />
+                <div>
+                  <p className="text-gray-900">
+                    <span className="font-medium">{notification.user.name}</span> {notification.content}
+                  </p>
+                  <p className="text-gray-500 text-sm">{notification.time}</p>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="p-6 text-center">
+          <p className="text-gray-500">No notifications yet</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default NotificationList;
+
+// src/components/MessageList.jsx
+import React from 'react';
+
+const MessageList = () => {
+  // Mock conversation data - would come from API in real implementation
+  const conversations = [
+    {
+      id: 1,
+      user: {
+        name: "Jane Smith",
+        username: "janesmith",
+        avatar: "/api/placeholder/40/40"
+      },
+      lastMessage: "Hey, how's it going with Murmur?",
+      time: "10:30 AM",
+      unread: true
+    },
+    {
+      id: 2,
+      user: {
+        name: "Alex Johnson",
+        username: "alexj",
+        avatar: "/api/placeholder/40/40"
+      },
+      lastMessage: "Let's catch up soon!",
+      time: "Yesterday",
+      unread: false
+    },
+    {
+      id: 3,
+      user: {
+        name: "Sarah Williams",
+        username: "sarahw",
+        avatar: "/api/placeholder/40/40"
+      },
+      lastMessage: "Thanks for the help with my project",
+      time: "Mar 1",
+      unread: false
+    }
+  ];
+
+  return (
+    <div className="bg-white rounded-lg shadow">
+      {conversations.length > 0 ? (
+        <ul className="divide-y">
+          {conversations.map(conversation => (
+            <li 
+              key={conversation.id} 
+              className={`p-4 hover:bg-gray-50 cursor-pointer flex items-start ${
+                conversation.unread ? 'bg-blue-50' : ''
+              }`}
+            >
+              <img 
+                src={conversation.user.avatar} 
+                alt={conversation.user.name} 
+                className="w-10 h-10 rounded-full mr-3"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between">
+                  <h3 className="font-medium truncate">{conversation.user.name}</h3>
+                  <span className="text-gray-500 text-sm">{conversation.time}</span>
+                </div>
+                <p className={`text-sm truncate ${conversation.unread ? 'font-semibold' : 'text-gray-500'}`}>
+                  {conversation.lastMessage}
+                </p>
+              </div>
+              {conversation.unread && (
+                <div className="ml-2 w-2 h-2 bg-blue-600 rounded-full"></div>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="p-6 text-center">
+          <p className="text-gray-500">No messages yet</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default MessageList;
+
+// src/components/UserSettings.jsx
+import React, { useState } from 'react';
+
+const UserSettings = () => {
+  const [formData, setFormData] = useState({
+    name: "John Doe",
+    username: "johndoe",
+    email: "john.doe@example.com",
+    bio: "Frontend developer and tech enthusiast. Creator of Murmur."
+  });
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    // TODO: Implement settings update functionality
+    console.log('Updating settings:', formData);
+    // Mock successful update
+    alert('Settings updated successfully!');
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-6">Account Settings</h2>
+      
+      <form onSubmit={handleSubmit}>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Name
+            </label>
+            <input
+              type="text"
+              name="name"
+              value={formData.name}
+              onChange={handleChange}
+              className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Username
+            </label>
+            <input
+              type="text"
+              name="username"
+              value={formData.username}
+              onChange={handleChange}
+              className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Email
+            </label>
+            <input
+              type="email"
+              name="email"
+              value={formData.email}
+              onChange={handleChange}
+              className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Bio
+            </label>
+            <textarea
+              name="bio"
+              value={formData.bio}
+              onChange={handleChange}
+              rows="3"
+              className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          <div className="pt-4">
+            <button
+              type="submit"
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            >
+              Save Changes
+            </button>
+          </div>
+        </div>
+      </form>
+      
+      <hr className="my-8" />
+      
+      <div>
+        <h3 className="text-lg font-medium mb-4">Privacy</h3>
+        {/* Would implement privacy settings here */}
+        <p className="text-gray-500">Privacy settings will be implemented in the next phase.</p>
+      </div>
+      
+      <hr className="my-8" />
+      
+      <div>
+        <h3 className="text-lg font-medium mb-4 text-red-600">Danger Zone</h3>
+        <button
+          type="button"
+          className="px-4 py-2 border border-red-600 text-red-600 rounded-lg hover:bg-red-50"
+        >
+          Delete Account
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default UserSettings;
 
