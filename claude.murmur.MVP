@@ -921,3 +921,934 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
 
   // Update progress bar based on recording duration
   useEffect
+
+// client/src/components/record/VoiceRecorder.tsx
+import React, { useState, useEffect } from 'react';
+import { useAudioRecorder } from '../../hooks/useAudioRecorder';
+import { Category, VoiceTone, AudioRecording } from '../../types';
+import toast from 'react-hot-toast';
+
+interface VoiceRecorderProps {
+  onRecordingComplete: (recording: AudioRecording) => void;
+  maxDuration?: number; // in milliseconds
+}
+
+const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
+  onRecordingComplete,
+  maxDuration = 30000, // Default 30 seconds
+}) => {
+  const {
+    recording,
+    audioURL,
+    audioDuration,
+    startRecording,
+    stopRecording,
+    resetRecording,
+    error,
+  } = useAudioRecorder(maxDuration);
+
+  const [progress, setProgress] = useState(0);
+  const [isHolding, setIsHolding] = useState(false);
+
+  // Update progress bar based on recording duration
+  useEffect(() => {
+    if (recording) {
+      setProgress(Math.min((audioDuration / maxDuration) * 100, 100));
+    }
+  }, [audioDuration, maxDuration, recording]);
+
+  // Handle errors from the audio recorder
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+    }
+  }, [error]);
+
+  const handleStartRecording = async () => {
+    try {
+      setIsHolding(true);
+      await startRecording();
+    } catch (err) {
+      console.error('Failed to start recording:', err);
+      toast.error('Could not start recording. Please check your microphone permissions.');
+    }
+  };
+
+  const handleStopRecording = async () => {
+    try {
+      setIsHolding(false);
+      const recording = await stopRecording();
+      if (recording) {
+        onRecordingComplete(recording);
+      }
+    } catch (err) {
+      console.error('Failed to stop recording:', err);
+      toast.error('An error occurred while saving your recording.');
+    }
+  };
+
+  const handleReset = () => {
+    resetRecording();
+    setProgress(0);
+  };
+
+  const formatDuration = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="voice-recorder">
+      <div className="recorder-status">
+        <div className="status-indicator">
+          {recording && <span className="recording-pulse"></span>}
+          <span className="status-text">
+            {recording ? 'Recording...' : audioURL ? 'Recording complete' : 'Ready to record'}
+          </span>
+        </div>
+        
+        <div className="duration-display">
+          {formatDuration(audioDuration)} / {formatDuration(maxDuration)}
+        </div>
+      </div>
+
+      <div className="progress-bar-container">
+        <div 
+          className="progress-bar" 
+          style={{ width: `${progress}%` }}
+        ></div>
+      </div>
+
+      <div className="recorder-controls">
+        {!audioURL ? (
+          <button
+            className={`record-button ${recording ? 'recording' : ''}`}
+            onMouseDown={handleStartRecording}
+            onMouseUp={handleStopRecording}
+            onTouchStart={handleStartRecording}
+            onTouchEnd={handleStopRecording}
+            disabled={error !== null}
+          >
+            {recording ? 'Release to stop' : 'Hold to record'}
+          </button>
+        ) : (
+          <div className="playback-controls">
+            <audio src={audioURL} controls className="audio-playback"></audio>
+            <button 
+              className="reset-button"
+              onClick={handleReset}
+              aria-label="Reset recording"
+            >
+              Reset
+            </button>
+          </div>
+        )}
+      </div>
+
+      {recording && (
+        <p className="recording-tip">
+          Speak clearly into your microphone. Recording will automatically stop after {maxDuration / 1000} seconds.
+        </p>
+      )}
+    </div>
+  );
+};
+
+export default VoiceRecorder;
+// client/src/components/record/RecommendationForm.tsx
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Category, VoiceTone, AudioRecording } from '../../types';
+import { createRecommendation } from '../../api/recommendations';
+import VoiceRecorder from './VoiceRecorder';
+import toast from 'react-hot-toast';
+
+const CATEGORIES: Category[] = [
+  'Food', 
+  'Travel', 
+  'Shopping', 
+  'Experiences', 
+  'Books', 
+  'Movies', 
+  'Music', 
+  'Technology', 
+  'Health & Wellness'
+];
+
+const VOICE_TONES: VoiceTone[] = ['Excited', 'Calm', 'Serious'];
+
+const RecommendationForm: React.FC = () => {
+  const navigate = useNavigate();
+  const [text, setText] = useState('');
+  const [category, setCategory] = useState<Category>('Experiences');
+  const [tone, setTone] = useState<VoiceTone>('Excited');
+  const [recording, setRecording] = useState<AudioRecording | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [step, setStep] = useState<'record' | 'details'>('record');
+  
+  const handleRecordingComplete = (newRecording: AudioRecording) => {
+    setRecording(newRecording);
+    setStep('details');
+  };
+  
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setText(e.target.value);
+  };
+  
+  const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setCategory(e.target.value as Category);
+  };
+  
+  const handleToneChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setTone(e.target.value as VoiceTone);
+  };
+  
+  const handleGoBack = () => {
+    setStep('record');
+  };
+  
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!recording) {
+      toast.error('Please record audio before submitting');
+      return;
+    }
+    
+    if (!text.trim()) {
+      toast.error('Please add a text description');
+      return;
+    }
+    
+    try {
+      setIsSubmitting(true);
+      
+      const recommendationData = {
+        text,
+        category,
+        tone,
+        audioBlob: recording.blob
+      };
+      
+      const result = await createRecommendation(recommendationData);
+      
+      toast.success('Recommendation published successfully!');
+      navigate(`/recommendations/${result.id}`);
+    } catch (error) {
+      console.error('Error submitting recommendation:', error);
+      toast.error('Failed to publish recommendation. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  
+  return (
+    <div className="recommendation-form">
+      <h2 className="form-title">
+        {step === 'record' ? 'Record Your Recommendation' : 'Finalize Your Recommendation'}
+      </h2>
+      
+      {step === 'record' ? (
+        <div className="recording-step">
+          <p className="recording-instructions">
+            Hold the record button and share your recommendation with the world.
+            Try to be clear and concise, focusing on what you loved (or didn't).
+          </p>
+          
+          <VoiceRecorder 
+            onRecordingComplete={handleRecordingComplete}
+            maxDuration={60000} // 1 minute max
+          />
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="details-form">
+          <div className="form-group">
+            <label htmlFor="recommendation-text">What's your recommendation?</label>
+            <textarea
+              id="recommendation-text"
+              value={text}
+              onChange={handleTextChange}
+              placeholder="Describe what you're recommending and why..."
+              rows={4}
+              required
+              className="text-input"
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="category-select">Category</label>
+            <select
+              id="category-select"
+              value={category}
+              onChange={handleCategoryChange}
+              className="category-select"
+              required
+            >
+              {CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="tone-select">Voice Tone</label>
+            <select
+              id="tone-select"
+              value={tone}
+              onChange={handleToneChange}
+              className="tone-select"
+              required
+            >
+              {VOICE_TONES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          {recording && (
+            <div className="recording-preview">
+              <h3>Your Recording</h3>
+              <audio src={recording.url} controls className="audio-preview" />
+              <p className="recording-duration">
+                Duration: {Math.round(recording.duration / 1000)} seconds
+              </p>
+            </div>
+          )}
+          
+          <div className="form-actions">
+            <button
+              type="button"
+              onClick={handleGoBack}
+              className="back-button"
+              disabled={isSubmitting}
+            >
+              Re-record
+            </button>
+            
+            <button
+              type="submit"
+              className="submit-button"
+              disabled={isSubmitting || !recording || !text.trim()}
+            >
+              {isSubmitting ? 'Publishing...' : 'Publish Recommendation'}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+};
+
+export default RecommendationForm;
+
+// client/src/pages/RecordPage.tsx
+import React from 'react';
+import { Helmet } from 'react-helmet';
+import RecommendationForm from '../components/record/RecommendationForm';
+
+const RecordPage: React.FC = () => {
+  return (
+    <div className="record-page">
+      <Helmet>
+        <title>Create a Recommendation | Murmur</title>
+        <meta name="description" content="Share your voice recommendation with the world" />
+      </Helmet>
+      
+      <div className="page-header">
+        <h1>Share Your Recommendation</h1>
+        <p className="page-description">
+          Record your voice and share your honest opinion about products, places, or experiences.
+        </p>
+      </div>
+      
+      <div className="content-container">
+        <RecommendationForm />
+        
+        <div className="recording-tips">
+          <h3>Tips for a Great Recommendation</h3>
+          <ul>
+            <li>
+              <strong>Be specific:</strong> Share details about what you're recommending
+            </li>
+            <li>
+              <strong>Be authentic:</strong> Your honest opinion matters most
+            </li>
+            <li>
+              <strong>Be concise:</strong> Keep your recommendation under 60 seconds
+            </li>
+            <li>
+              <strong>Good audio:</strong> Find a quiet space to record
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RecordPage;
+
+// client/src/components/recommendations/RecommendationFeed.tsx
+import React, { useState, useEffect, useCallback } from 'react';
+import { Recommendation, Category } from '../../types';
+import { fetchRecommendations } from '../../api/recommendations';
+import RecommendationCard from './RecommendationCard';
+import toast from 'react-hot-toast';
+
+interface RecommendationFeedProps {
+  initialCategory?: Category | null;
+}
+
+const RecommendationFeed: React.FC<RecommendationFeedProps> = ({ 
+  initialCategory = null 
+}) => {
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(initialCategory);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+
+  const CATEGORIES: Category[] = [
+    'Food', 
+    'Travel', 
+    'Shopping', 
+    'Experiences', 
+    'Books', 
+    'Movies', 
+    'Music', 
+    'Technology', 
+    'Health & Wellness'
+  ];
+
+  // Fetch recommendations based on current filters
+  const loadRecommendations = useCallback(async (reset = false) => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const currentPage = reset ? 1 : page;
+      const result = await fetchRecommendations(
+        selectedCategory || undefined,
+        searchQuery || undefined,
+        currentPage,
+        10 // limit per page
+      );
+      
+      if (reset) {
+        setRecommendations(result.recommendations);
+      } else {
+        setRecommendations(prev => [...prev, ...result.recommendations]);
+      }
+      
+      setTotalCount(result.total);
+      setHasMore(result.recommendations.length === 10);
+      
+      if (reset) {
+        setPage(1);
+      } else {
+        setPage(currentPage + 1);
+      }
+    } catch (err) {
+      console.error('Error fetching recommendations:', err);
+      setError('Failed to load recommendations. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedCategory, searchQuery, page]);
+
+  // Initial load
+  useEffect(() => {
+    loadRecommendations(true);
+  }, [selectedCategory, searchQuery]);
+
+  // Handle category filter change
+  const handleCategoryChange = (category: Category | null) => {
+    if (category === selectedCategory) {
+      setSelectedCategory(null);
+    } else {
+      setSelectedCategory(category);
+    }
+  };
+
+  // Handle search input
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
+  };
+
+  // Handle search form submission
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    loadRecommendations(true);
+  };
+
+  // Load more recommendations
+  const handleLoadMore = () => {
+    if (!loading && hasMore) {
+      loadRecommendations();
+    }
+  };
+
+  // Handle sharing a recommendation
+  const handleShare = (id: string) => {
+    const shareUrl = `${window.location.origin}/recommendations/${id}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'Check out this recommendation on Murmur!',
+        url: shareUrl
+      }).catch(err => {
+        console.error('Error sharing:', err);
+      });
+    } else {
+      // Fallback to clipboard copy
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        toast.success('Link copied to clipboard!');
+      }).catch(err => {
+        console.error('Error copying to clipboard:', err);
+        toast.error('Failed to copy link. Please try again.');
+      });
+    }
+  };
+
+  // Handle reactions (like/dislike)
+  const handleReaction = (id: string, reaction: 'like' | 'dislike') => {
+    // This would typically call an API endpoint to record the reaction
+    // For the MVP, we'll just show a toast
+    toast.success(`You ${reaction}d this recommendation!`);
+  };
+
+  return (
+    <div className="recommendation-feed">
+      <div className="feed-filters">
+        <div className="category-filters">
+          {CATEGORIES.map(category => (
+            <button
+              key={category}
+              className={`category-filter ${selectedCategory === category ? 'active' : ''}`}
+              onClick={() => handleCategoryChange(category)}
+            >
+              {category}
+            </button>
+          ))}
+          {selectedCategory && (
+            <button 
+              className="clear-filter"
+              onClick={() => setSelectedCategory(null)}
+            >
+              Clear filter
+            </button>
+          )}
+        </div>
+        
+        <form onSubmit={handleSearchSubmit} className="search-form">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={handleSearchChange}
+            placeholder="Search recommendations..."
+            className="search-input"
+          />
+          <button type="submit" className="search-button">
+            Search
+          </button>
+        </form>
+      </div>
+      
+      {loading && page === 1 && (
+        <div className="loading-state">
+          <div className="spinner"></div>
+          <p>Loading recommendations...</p>
+        </div>
+      )}
+      
+      {error && (
+        <div className="error-state">
+          <p>{error}</p>
+          <button onClick={() => loadRecommendations(true)}>Retry</button>
+        </div>
+      )}
+      
+      {!loading && !error && recommendations.length === 0 && (
+        <div className="empty-state">
+          <h3>No recommendations found</h3>
+          <p>
+            {selectedCategory || searchQuery
+              ? 'Try adjusting your filters or search query'
+              : 'Be the first to share a recommendation!'}
+          </p>
+        </div>
+      )}
+      
+      <div className="recommendations-list">
+        {recommendations.map(recommendation => (
+          <RecommendationCard
+            key={recommendation.id}
+            recommendation={recommendation}
+            onShare={handleShare}
+            onReaction={handleReaction}
+          />
+        ))}
+      </div>
+      
+      {!loading && hasMore && (
+        <div className="load-more">
+          <button 
+            onClick={handleLoadMore}
+            className="load-more-button"
+          >
+            Load More
+          </button>
+        </div>
+      )}
+      
+      {loading && page > 1 && (
+        <div className="loading-more">
+          <div className="spinner-small"></div>
+          <p>Loading more...</p>
+        </div>
+      )}
+      
+      {!loading && recommendations.length > 0 && (
+        <div className="feed-stats">
+          Showing {recommendations.length} of {totalCount} recommendations
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default RecommendationFeed;
+
+// client/src/pages/HomePage.tsx
+import React from 'react';
+import { Helmet } from 'react-helmet';
+import { Link } from 'react-router-dom';
+import RecommendationFeed from '../components/recommendations/RecommendationFeed';
+
+const HomePage: React.FC = () => {
+  const isAuthenticated = !!localStorage.getItem('authToken');
+
+  return (
+    <div className="home-page">
+      <Helmet>
+        <title>Murmur - Voice Recommendations</title>
+        <meta name="description" content="Discover voice-based recommendations from real people" />
+      </Helmet>
+
+      <div className="hero-section">
+        <div className="hero-content">
+          <h1 className="hero-title">Hear authentic recommendations</h1>
+          <p className="hero-subtitle">
+            Real voices. Real opinions. Discover products, places, and experiences
+            recommended by real people.
+          </p>
+          
+          {isAuthenticated ? (
+            <Link to="/record" className="cta-button">
+              Share Your Recommendation
+            </Link>
+          ) : (
+            <div className="auth-cta">
+              <Link to="/login" className="login-button">
+                Log In
+              </Link>
+              <Link to="/register" className="register-button">
+                Sign Up
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="popular-categories">
+        <h2>Popular Categories</h2>
+        <div className="categories-grid">
+          {['Food', 'Travel', 'Books', 'Technology'].map(category => (
+            <div key={category} className="category-card">
+              <h3>{category}</h3>
+              <p>Discover {category.toLowerCase()} recommendations</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="main-content">
+        <h2>Latest Recommendations</h2>
+        <RecommendationFeed />
+      </div>
+
+      <div className="app-download">
+        <div className="download-content">
+          <h2>Take Murmur with you</h2>
+          <p>Download our mobile app and discover recommendations on the go.</p>
+          <div className="download-buttons">
+            <a href="#" className="app-store-button">App Store</a>
+            <a href="#" className="play-store-button">Google Play</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default HomePage;
+
+// client/src/pages/ProfilePage.tsx
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Helmet } from 'react-helmet';
+import { fetchUser, fetchUserRecommendations, listenToUser, muteUser } from '../api/users';
+import { User, Recommendation } from '../types';
+import RecommendationCard from '../components/recommendations/RecommendationCard';
+import toast from 'react-hot-toast';
+
+const ProfilePage: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [user, setUser] = useState<User | null>(null);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [isListening, setIsListening] = useState(false);
+  
+  // Get the current user ID from localStorage
+  const currentUserId = localStorage.getItem('userId');
+  const isOwnProfile = currentUserId === id;
+
+  // Fetch user profile and initial recommendations
+  useEffect(() => {
+    const loadProfile = async () => {
+      if (!id) return;
+      
+      try {
+        setLoading(true);
+        setError(null);
+        
+        // Fetch user profile
+        const userData = await fetchUser(id);
+        setUser(userData);
+        
+        // Check if current user is listening to this profile
+        setIsListening(userData.listenersCount > 0); // This is a simplification; would need a proper endpoint
+        
+        // Fetch user's recommendations
+        const result = await fetchUserRecommendations(id, 1, 5);
+        setRecommendations(result.recommendations);
+        setHasMore(result.recommendations.length === 5);
+        
+      } catch (err) {
+        console.error('Error loading profile:', err);
+        setError('Failed to load user profile. The user may not exist or has been removed.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadProfile();
+  }, [id]);
+
+  // Load more recommendations
+  const loadMoreRecommendations = async () => {
+    if (!id || !hasMore || loading) return;
+    
+    try {
+      setLoading(true);
+      const nextPage = page + 1;
+      const result = await fetchUserRecommendations(id, nextPage, 5);
+      
+      if (result.recommendations.length > 0) {
+        setRecommendations(prev => [...prev, ...result.recommendations]);
+        setPage(nextPage);
+      }
+      
+      setHasMore(result.recommendations.length === 5);
+    } catch (err) {
+      console.error('Error loading more recommendations:', err);
+      toast.error('Failed to load more recommendations');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle listen/unfollow functionality
+  const handleListenToggle = async () => {
+    if (!id || !user) return;
+    
+    try {
+      if (isListening) {
+        await muteUser(id);
+        setIsListening(false);
+        toast.success(`You are no longer listening to ${user.name}`);
+      } else {
+        await listenToUser(id);
+        setIsListening(true);
+        toast.success(`You are now listening to ${user.name}`);
+      }
+      
+      // Update the user object with the new count
+      setUser(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          listenersCount: isListening 
+            ? Math.max(0, prev.listenersCount - 1)
+            : prev.listenersCount + 1
+        };
+      });
+    } catch (err) {
+      console.error('Error toggling listen status:', err);
+      toast.error('Failed to update listening status');
+    }
+  };
+
+  // Handle sharing a recommendation
+  const handleShare = (recommendationId: string) => {
+    const shareUrl = `${window.location.origin}/recommendations/${recommendationId}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: `Check out this recommendation by ${user?.name}`,
+        url: shareUrl
+      }).catch(err => {
+        console.error('Error sharing:', err);
+      });
+    } else {
+      // Fallback to clipboard copy
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        toast.success('Link copied to clipboard!');
+      }).catch(err => {
+        console.error('Error copying to clipboard:', err);
+        toast.error('Failed to copy link');
+      });
+    }
+  };
+
+  // Handle reactions (like/dislike)
+  const handleReaction = (id: string, reaction: 'like' | 'dislike') => {
+    // This would typically call an API endpoint to record the reaction
+    toast.success(`You ${reaction}d this recommendation!`);
+  };
+
+  // Handle sharing the profile
+  const handleShareProfile = () => {
+    if (!user) return;
+    
+    const profileUrl = `${window.location.origin}/profile/${id}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: `Check out ${user.name} on Murmur`,
+        url: profileUrl
+      }).catch(err => {
+        console.error('Error sharing:', err);
+      });
+    } else {
+      // Fallback to clipboard copy
+      navigator.clipboard.writeText(profileUrl).then(() => {
+        toast.success('Profile link copied to clipboard!');
+      }).catch(err => {
+        console.error('Error copying to clipboard:', err);
+        toast.error('Failed to copy profile link');
+      });
+    }
+  };
+
+  if (error) {
+    return (
+      <div className="error-container">
+        <h2>Error</h2>
+        <p>{error}</p>
+        <button onClick={() => navigate('/')} className="back-button">
+          Go to Homepage
+        </button>
+      </div>
+    );
+  }
+
+  if (loading && !user) {
+    return (
+      <div className="loading-container">
+        <div className="spinner"></div>
+        <p>Loading profile...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <div className="profile-page">
+      <Helmet>
+        <title>{user.name} | Murmur</title>
+        <meta name="description" content={`Check out ${user.name}'s recommendations on Murmur`} />
+      </Helmet>
+
+      <div className="profile-header">
+        <div className="profile-cover-photo"></div>
+        
+        <div className="profile-info">
+          <div className="profile-avatar">
+            <img 
+              src={user.profilePic || '/assets/default-avatar.png'} 
+              alt={user.name} 
+              className="avatar-image"
+            />
+          </div>
+          
+          <div className="profile-details">
+            <h1 className="profile-name">{user.name}</h1>
+            
+            <p className="profile-bio">
+              {user.bio || 'No bio available'}
+            </p>
+            
+            <div className="profile-stats">
+              <div className="stat">
+                <span className="stat-value">{user.listenersCount}</span>
+                <span className="stat-label">Listeners</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{user.listeningCount}</span>
+                <span className="stat-label">Listening</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{recommendations.length}</span>
+                <span className="stat-label">Recommendations</span>
+              </div>
+            </div>
+            
+            <div className="profile-actions">
+              {!isOwnProfile && (
+                <button 
+                  className={`listen-button ${isListening ? 'listening' : ''}`}
+                  onClick={handleListenToggle}
+                >
+                  {isListening ? 'Listening' : 'Listen'}
+                </button>
+              )}
+              
+              {isOwnProfile && (
+                <button 
+                  className="edit-profile-button"
+                  onClick={() => navigate('/settings/profile')}
+                >
+                  Edit Profile
+                </button>
+              )}
+              
+              <button 
+                className="share-profile-
+
