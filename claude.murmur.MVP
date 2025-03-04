@@ -1,0 +1,923 @@
+// PROJECT STRUCTURE
+/**
+ * /
+ * ├── client/                  # Frontend React application
+ * │   ├── public/              # Static assets
+ * │   ├── src/
+ * │   │   ├── api/             # API client with typed endpoints
+ * │   │   ├── components/      # React components
+ * │   │   ├── hooks/           # Custom React hooks
+ * │   │   ├── pages/           # Page components
+ * │   │   ├── store/           # Redux state management
+ * │   │   ├── types/           # TypeScript type definitions
+ * │   │   ├── utils/           # Utility functions
+ * │   │   ├── App.tsx          # Main App component
+ * │   │   ├── index.tsx        # Entry point
+ * │   ├── package.json         # Frontend dependencies
+ * │   ├── tsconfig.json        # TypeScript configuration
+ * ├── server/                  # Backend Node.js application
+ * │   ├── src/
+ * │   │   ├── config/          # Configuration files
+ * │   │   ├── controllers/     # Route controllers
+ * │   │   ├── middleware/      # Express middleware
+ * │   │   ├── models/          # Database models
+ * │   │   ├── routes/          # API routes
+ * │   │   ├── services/        # Business logic
+ * │   │   ├── types/           # TypeScript type definitions
+ * │   │   ├── utils/           # Utility functions
+ * │   │   ├── app.ts           # Express app setup
+ * │   │   ├── server.ts        # Server entry point
+ * │   ├── package.json         # Backend dependencies
+ * │   ├── tsconfig.json        # TypeScript configuration
+ * ├── docker/                  # Docker configuration
+ * │   ├── docker-compose.yml   # Multi-container setup
+ * │   ├── Dockerfile.client    # Frontend container
+ * │   ├── Dockerfile.server    # Backend container
+ * ├── .github/                 # GitHub workflows for CI/CD
+ * ├── README.md                # Project documentation
+ * ├── LICENSE                  # License information
+ */
+
+// client/src/types/index.ts
+export interface User {
+  id: string;
+  name: string;
+  bio: string | null;
+  profilePic: string | null;
+  listenersCount: number;
+  listeningCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Recommendation {
+  id: string;
+  userId: string;
+  text: string;
+  audioUrl: string;
+  category: string;
+  sentiment: SentimentAnalysis;
+  createdAt: string;
+  user?: User;
+}
+
+export interface SentimentAnalysis {
+  score: number;
+  keywords: Array<{
+    text: string;
+    sentiment: number;
+  }>;
+  overall: 'positive' | 'negative' | 'neutral';
+}
+
+export interface AudioRecording {
+  blob: Blob;
+  url: string;
+  duration: number;
+}
+
+export interface ApiError {
+  message: string;
+  status?: number;
+  errors?: Record<string, string[]>;
+}
+
+export type Category = 
+  | 'Food' 
+  | 'Travel' 
+  | 'Shopping' 
+  | 'Experiences' 
+  | 'Books' 
+  | 'Movies' 
+  | 'Music' 
+  | 'Technology' 
+  | 'Health & Wellness';
+
+export type VoiceTone = 'Excited' | 'Calm' | 'Serious';
+
+// client/src/api/client.ts
+import axios, { AxiosError, AxiosRequestConfig } from 'axios';
+import { ApiError } from '../types';
+
+const API_URL = process.env.REACT_APP_API_URL || 'https://murmurs.app/api';
+
+const apiClient = axios.create({
+  baseURL: API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  timeout: 10000,
+});
+
+// Request interceptor for adding auth token
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('authToken');
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// Response interceptor for error handling
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    const apiError: ApiError = {
+      message: 'An unknown error occurred',
+      status: error.response?.status,
+    };
+
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      apiError.message = error.response.data?.message || 'Server error';
+      apiError.errors = error.response.data?.errors;
+      
+      // Handle authentication errors
+      if (error.response.status === 401) {
+        // Clear token and redirect to login
+        localStorage.removeItem('authToken');
+        window.location.href = '/login';
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      apiError.message = 'No response from server. Please check your connection.';
+    } else {
+      // Something happened in setting up the request
+      apiError.message = error.message;
+    }
+
+    return Promise.reject(apiError);
+  }
+);
+
+export const get = async <T>(url: string, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await apiClient.get<T>(url, config);
+  return response.data;
+};
+
+export const post = async <T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await apiClient.post<T>(url, data, config);
+  return response.data;
+};
+
+export const put = async <T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await apiClient.put<T>(url, data, config);
+  return response.data;
+};
+
+export const del = async <T>(url: string, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await apiClient.delete<T>(url, config);
+  return response.data;
+};
+
+export default apiClient;
+
+// client/src/api/recommendations.ts
+import { get, post } from './client';
+import { Recommendation } from '../types';
+
+export const fetchRecommendations = async (
+  category?: string, 
+  searchQuery?: string, 
+  page = 1, 
+  limit = 10
+): Promise<{ recommendations: Recommendation[], total: number }> => {
+  return get<{ recommendations: Recommendation[], total: number }>('/recommendations', {
+    params: { category, q: searchQuery, page, limit }
+  });
+};
+
+export const fetchRecommendation = async (id: string): Promise<Recommendation> => {
+  return get<Recommendation>(`/recommendations/${id}`);
+};
+
+export const createRecommendation = async (
+  data: { 
+    text: string; 
+    category: string; 
+    tone: string;
+    audioBlob?: Blob;
+  }
+): Promise<Recommendation> => {
+  const formData = new FormData();
+  formData.append('text', data.text);
+  formData.append('category', data.category);
+  formData.append('tone', data.tone);
+  
+  if (data.audioBlob) {
+    formData.append('audio', data.audioBlob, 'recording.webm');
+  }
+
+  return post<Recommendation>('/recommendations', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+};
+
+// client/src/api/users.ts
+import { get, post } from './client';
+import { User, Recommendation } from '../types';
+
+export const fetchUser = async (id: string): Promise<User> => {
+  return get<User>(`/users/${id}`);
+};
+
+export const fetchUserRecommendations = async (
+  userId: string,
+  page = 1,
+  limit = 10
+): Promise<{ recommendations: Recommendation[], total: number }> => {
+  return get<{ recommendations: Recommendation[], total: number }>(`/users/${userId}/recommendations`, {
+    params: { page, limit }
+  });
+};
+
+export const listenToUser = async (userId: string): Promise<{ message: string }> => {
+  return post<{ message: string }>(`/users/${userId}/listen`);
+};
+
+export const muteUser = async (userId: string): Promise<{ message: string }> => {
+  return post<{ message: string }>(`/users/${userId}/mute`);
+};
+
+export const updateProfile = async (
+  data: {
+    name?: string;
+    bio?: string;
+    profilePic?: File;
+  }
+): Promise<User> => {
+  const formData = new FormData();
+  if (data.name) formData.append('name', data.name);
+  if (data.bio) formData.append('bio', data.bio);
+  if (data.profilePic) formData.append('profilePic', data.profilePic);
+
+  return post<User>('/users/profile', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+};
+
+// client/src/api/auth.ts
+import { post } from './client';
+
+interface AuthResponse {
+  token: string;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+  };
+}
+
+export const login = async (
+  email: string,
+  password: string
+): Promise<AuthResponse> => {
+  const response = await post<AuthResponse>('/auth/login', { email, password });
+  // Store token in localStorage
+  localStorage.setItem('authToken', response.token);
+  return response;
+};
+
+export const register = async (
+  name: string,
+  email: string,
+  password: string
+): Promise<AuthResponse> => {
+  const response = await post<AuthResponse>('/auth/register', { name, email, password });
+  // Store token in localStorage
+  localStorage.setItem('authToken', response.token);
+  return response;
+};
+
+export const logout = (): void => {
+  localStorage.removeItem('authToken');
+};
+
+// client/src/hooks/useAudioRecorder.ts
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { AudioRecording } from '../types';
+
+interface AudioRecorderHook {
+  recording: boolean;
+  audioURL: string | null;
+  audioDuration: number;
+  startRecording: () => Promise<void>;
+  stopRecording: () => Promise<AudioRecording | null>;
+  resetRecording: () => void;
+  error: string | null;
+}
+
+export const useAudioRecorder = (maxDurationMs = 30000): AudioRecorderHook => {
+  const [recording, setRecording] = useState<boolean>(false);
+  const [audioURL, setAudioURL] = useState<string | null>(null);
+  const [audioDuration, setAudioDuration] = useState<number>(0);
+  const [error, setError] = useState<string | null>(null);
+  
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const startTimeRef = useRef<number>(0);
+  const durationTimerRef = useRef<number | null>(null);
+  const maxDurationTimerRef = useRef<number | null>(null);
+  
+  // Clean up function to stop all recording processes
+  const cleanup = useCallback(() => {
+    if (durationTimerRef.current) {
+      window.clearInterval(durationTimerRef.current);
+      durationTimerRef.current = null;
+    }
+    
+    if (maxDurationTimerRef.current) {
+      window.clearTimeout(maxDurationTimerRef.current);
+      maxDurationTimerRef.current = null;
+    }
+    
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop();
+    }
+    
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    
+    setRecording(false);
+  }, [recording]);
+  
+  // Ensure cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      cleanup();
+      
+      // Also clean up any object URLs to prevent memory leaks
+      if (audioURL) {
+        URL.revokeObjectURL(audioURL);
+      }
+    };
+  }, [cleanup, audioURL]);
+  
+  const startRecording = useCallback(async () => {
+    try {
+      // Reset any previous recordings
+      resetRecording();
+      
+      // Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      
+      // Set up MediaRecorder with the stream
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      
+      // Set up event handlers
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+      
+      // Start recording
+      chunksRef.current = [];
+      mediaRecorder.start(100); // Collect data every 100ms
+      startTimeRef.current = Date.now();
+      setRecording(true);
+      
+      // Set up timer for tracking duration
+      durationTimerRef.current = window.setInterval(() => {
+        const currentDuration = Date.now() - startTimeRef.current;
+        setAudioDuration(currentDuration);
+      }, 100);
+      
+      // Set up timer for maximum duration
+      maxDurationTimerRef.current = window.setTimeout(() => {
+        if (recording) {
+          stopRecording();
+        }
+      }, maxDurationMs);
+      
+    } catch (err) {
+      console.error('Error starting recording:', err);
+      setError('Could not access the microphone. Please ensure it is connected and you have given permission.');
+    }
+  }, [maxDurationMs, recording, stopRecording]);
+  
+  const stopRecording = useCallback(async (): Promise<AudioRecording | null> => {
+    if (!mediaRecorderRef.current || !recording) {
+      return null;
+    }
+    
+    return new Promise((resolve) => {
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.onstop = () => {
+          const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+          const url = URL.createObjectURL(blob);
+          setAudioURL(url);
+          const finalDuration = Date.now() - startTimeRef.current;
+          setAudioDuration(finalDuration);
+          
+          // Clean up timers and streams
+          if (durationTimerRef.current) {
+            window.clearInterval(durationTimerRef.current);
+            durationTimerRef.current = null;
+          }
+          
+          if (maxDurationTimerRef.current) {
+            window.clearTimeout(maxDurationTimerRef.current);
+            maxDurationTimerRef.current = null;
+          }
+          
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+          }
+          
+          setRecording(false);
+          
+          resolve({
+            blob,
+            url,
+            duration: finalDuration
+          });
+        };
+        
+        mediaRecorderRef.current.stop();
+      } else {
+        resolve(null);
+      }
+    });
+  }, [recording]);
+  
+  const resetRecording = useCallback(() => {
+    cleanup();
+    
+    if (audioURL) {
+      URL.revokeObjectURL(audioURL);
+    }
+    
+    setAudioURL(null);
+    setAudioDuration(0);
+    setError(null);
+    chunksRef.current = [];
+  }, [cleanup, audioURL]);
+  
+  return {
+    recording,
+    audioURL,
+    audioDuration,
+    startRecording,
+    stopRecording,
+    resetRecording,
+    error
+  };
+};
+
+// client/src/hooks/usePagination.ts
+import { useState, useCallback } from 'react';
+
+interface PaginationHook<T> {
+  items: T[];
+  loading: boolean;
+  error: string | null;
+  page: number;
+  totalPages: number;
+  hasMore: boolean;
+  fetchPage: (newPage?: number) => Promise<void>;
+  fetchNextPage: () => Promise<void>;
+}
+
+export function usePagination<T>(
+  fetchFunction: (page: number, limit: number) => Promise<{ items: T[], total: number }>,
+  limit = 10
+): PaginationHook<T> {
+  const [items, setItems] = useState<T[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  const fetchPage = useCallback(async (newPage?: number) => {
+    const pageToFetch = newPage !== undefined ? newPage : page;
+    
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const result = await fetchFunction(pageToFetch, limit);
+      
+      setItems(result.items);
+      setTotal(result.total);
+      setPage(pageToFetch);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred while fetching data');
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchFunction, limit, page]);
+
+  const fetchNextPage = useCallback(async () => {
+    if (page < Math.ceil(total / limit)) {
+      await fetchPage(page + 1);
+    }
+  }, [fetchPage, page, total, limit]);
+
+  const totalPages = Math.ceil(total / limit);
+  const hasMore = page < totalPages;
+
+  return {
+    items,
+    loading,
+    error,
+    page,
+    totalPages,
+    hasMore,
+    fetchPage,
+    fetchNextPage
+  };
+}
+
+// client/src/App.tsx
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { Provider } from 'react-redux';
+import { Toaster } from 'react-hot-toast';
+
+import store from './store';
+import HomePage from './pages/HomePage';
+import RecordPage from './pages/RecordPage';
+import ProfilePage from './pages/ProfilePage';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import RecommendationPage from './pages/RecommendationPage';
+import NotFoundPage from './pages/NotFoundPage';
+import MainLayout from './components/layout/MainLayout';
+import LoadingScreen from './components/common/LoadingScreen';
+import ProtectedRoute from './components/auth/ProtectedRoute';
+
+import './App.css';
+
+function App() {
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Simulate loading app resources
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (isLoading) {
+    return <LoadingScreen />;
+  }
+
+  return (
+    <Provider store={store}>
+      <Router>
+        <Toaster position="top-right" />
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          
+          <Route path="/" element={<MainLayout />}>
+            <Route index element={<HomePage />} />
+            <Route path="recommendations/:id" element={<RecommendationPage />} />
+            <Route path="profile/:id" element={<ProfilePage />} />
+            
+            <Route path="record" element={
+              <ProtectedRoute>
+                <RecordPage />
+              </ProtectedRoute>
+            } />
+          </Route>
+          
+          <Route path="/404" element={<NotFoundPage />} />
+          <Route path="*" element={<Navigate to="/404" replace />} />
+        </Routes>
+      </Router>
+    </Provider>
+  );
+}
+
+export default App;
+
+// client/src/components/common/AudioPlayer.tsx
+import React, { useState, useEffect, useRef } from 'react';
+import WaveSurfer from 'wavesurfer.js';
+
+interface AudioPlayerProps {
+  audioUrl: string;
+  waveColor?: string;
+  progressColor?: string;
+  height?: number;
+  barWidth?: number;
+  barGap?: number;
+  showControls?: boolean;
+  className?: string;
+}
+
+const AudioPlayer: React.FC<AudioPlayerProps> = ({
+  audioUrl,
+  waveColor = '#ddd',
+  progressColor = '#6366f1',
+  height = 50,
+  barWidth = 2,
+  barGap = 1,
+  showControls = true,
+  className = '',
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const wavesurferRef = useRef<WaveSurfer | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  // Initialize wavesurfer
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const wavesurfer = WaveSurfer.create({
+        container: containerRef.current,
+        waveColor,
+        progressColor,
+        height,
+        barWidth,
+        barGap,
+        responsive: true,
+        cursorWidth: 0,
+        normalize: true,
+      });
+
+      wavesurfer.on('ready', () => {
+        wavesurferRef.current = wavesurfer;
+        setIsLoading(false);
+        setDuration(wavesurfer.getDuration());
+      });
+
+      wavesurfer.on('audioprocess', () => {
+        if (wavesurfer) {
+          setCurrentTime(wavesurfer.getCurrentTime());
+        }
+      });
+
+      wavesurfer.on('play', () => setIsPlaying(true));
+      wavesurfer.on('pause', () => setIsPlaying(false));
+      wavesurfer.on('finish', () => setIsPlaying(false));
+
+      wavesurfer.on('error', (err) => {
+        console.error('WaveSurfer error:', err);
+        setError('Could not load audio file');
+        setIsLoading(false);
+      });
+
+      wavesurfer.load(audioUrl);
+
+      return () => {
+        wavesurfer.destroy();
+      };
+    } catch (err) {
+      console.error('Error initializing WaveSurfer:', err);
+      setError('Could not initialize audio player');
+      setIsLoading(false);
+    }
+  }, [audioUrl, waveColor, progressColor, height, barWidth, barGap]);
+
+  const togglePlayPause = () => {
+    if (!wavesurferRef.current) return;
+
+    if (isPlaying) {
+      wavesurferRef.current.pause();
+    } else {
+      wavesurferRef.current.play();
+    }
+  };
+
+  const formatTime = (timeInSeconds: number): string => {
+    const minutes = Math.floor(timeInSeconds / 60);
+    const seconds = Math.floor(timeInSeconds % 60);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className={`audio-player ${className}`}>
+      {isLoading && <div className="audio-loading">Loading audio...</div>}
+      {error && <div className="audio-error">{error}</div>}
+
+      <div ref={containerRef} className="waveform-container"></div>
+
+      {showControls && (
+        <div className="audio-controls">
+          <button
+            onClick={togglePlayPause}
+            disabled={isLoading || !!error}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+            className="play-button"
+          >
+            {isPlaying ? '❚❚' : '▶'}
+          </button>
+
+          <div className="time-display">
+            <span className="current-time">{formatTime(currentTime)}</span>
+            <span className="duration"> / {formatTime(duration)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AudioPlayer;
+
+// client/src/components/recommendations/RecommendationCard.tsx
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { Recommendation } from '../../types';
+import AudioPlayer from '../common/AudioPlayer';
+
+interface RecommendationCardProps {
+  recommendation: Recommendation;
+  onShare: (id: string) => void;
+  onReaction: (id: string, reaction: 'like' | 'dislike') => void;
+}
+
+const RecommendationCard: React.FC<RecommendationCardProps> = ({
+  recommendation,
+  onShare,
+  onReaction,
+}) => {
+  // Safely highlight sentiment keywords in text
+  const renderHighlightedText = () => {
+    if (!recommendation.sentiment?.keywords?.length) {
+      return <p className="recommendation-text">{recommendation.text}</p>;
+    }
+
+    // Sort keywords by their position in the text to avoid overlap issues
+    const sortedKeywords = [...recommendation.sentiment.keywords].sort((a, b) => {
+      return recommendation.text.indexOf(a.text) - recommendation.text.indexOf(b.text);
+    });
+
+    let lastIndex = 0;
+    const result = [];
+    
+    // Process each keyword
+    for (const keyword of sortedKeywords) {
+      const keywordIndex = recommendation.text.indexOf(keyword.text, lastIndex);
+      
+      // If keyword not found after last position, skip it
+      if (keywordIndex === -1) continue;
+      
+      // Add text before keyword
+      if (keywordIndex > lastIndex) {
+        result.push(
+          <React.Fragment key={`text-${lastIndex}`}>
+            {recommendation.text.substring(lastIndex, keywordIndex)}
+          </React.Fragment>
+        );
+      }
+      
+      // Add highlighted keyword
+      const sentimentClass = keyword.sentiment > 0 
+        ? 'positive-sentiment' 
+        : keyword.sentiment < 0 
+          ? 'negative-sentiment' 
+          : 'neutral-sentiment';
+          
+      result.push(
+        <span key={`keyword-${keywordIndex}`} className={sentimentClass}>
+          {keyword.text}
+        </span>
+      );
+      
+      lastIndex = keywordIndex + keyword.text.length;
+    }
+    
+    // Add any remaining text
+    if (lastIndex < recommendation.text.length) {
+      result.push(
+        <React.Fragment key={`text-${lastIndex}`}>
+          {recommendation.text.substring(lastIndex)}
+        </React.Fragment>
+      );
+    }
+    
+    return <p className="recommendation-text">{result}</p>;
+  };
+
+  return (
+    <div className="recommendation-card">
+      <div className="recommendation-header">
+        <Link to={`/profile/${recommendation.userId}`} className="user-info">
+          <img 
+            src={recommendation.user?.profilePic || '/assets/default-avatar.png'} 
+            alt={recommendation.user?.name || 'User'} 
+            className="user-avatar"
+          />
+          <div className="user-details">
+            <h3 className="user-name">{recommendation.user?.name || 'Anonymous User'}</h3>
+            <span className="recommendation-time">
+              {new Date(recommendation.createdAt).toLocaleDateString()}
+            </span>
+          </div>
+        </Link>
+        <div className="recommendation-category">
+          <span className="category-tag">{recommendation.category}</span>
+        </div>
+      </div>
+      
+      <div className="recommendation-content">
+        {renderHighlightedText()}
+        
+        <div className="audio-section">
+          <AudioPlayer 
+            audioUrl={recommendation.audioUrl} 
+            waveColor="#d1d5db"
+            progressColor="#6366f1"
+          />
+        </div>
+      </div>
+      
+      <div className="recommendation-actions">
+        <div className="reaction-buttons">
+          <button 
+            className="reaction-button like-button" 
+            onClick={() => onReaction(recommendation.id, 'like')}
+            aria-label="Like"
+          >
+            <span className="reaction-icon">👍</span>
+          </button>
+          <button 
+            className="reaction-button dislike-button" 
+            onClick={() => onReaction(recommendation.id, 'dislike')}
+            aria-label="Dislike"
+          >
+            <span className="reaction-icon">👎</span>
+          </button>
+        </div>
+        
+        <button 
+          className="share-button" 
+          onClick={() => onShare(recommendation.id)}
+          aria-label="Share"
+        >
+          <span className="share-icon">🔗</span>
+          <span className="share-text">Share</span>
+        </button>
+        
+        <Link 
+          to={`/recommendations/${recommendation.id}`} 
+          className="view-button"
+          aria-label="View details"
+        >
+          View details
+        </Link>
+      </div>
+    </div>
+  );
+};
+
+export default RecommendationCard;
+
+// client/src/components/record/VoiceRecorder.tsx
+import React, { useState, useEffect } from 'react';
+import { useAudioRecorder } from '../../hooks/useAudioRecorder';
+import { Category, VoiceTone, AudioRecording } from '../../types';
+import toast from 'react-hot-toast';
+
+interface VoiceRecorderProps {
+  onRecordingComplete: (recording: AudioRecording) => void;
+  maxDuration?: number; // in milliseconds
+}
+
+const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
+  onRecordingComplete,
+  maxDuration = 30000, // Default 30 seconds
+}) => {
+  const {
+    recording,
+    audioURL,
+    audioDuration,
+    startRecording,
+    stopRecording,
+    resetRecording,
+    error,
+  } = useAudioRecorder(maxDuration);
+
+  const [progress, setProgress] = useState(0);
+  const [isHolding, setIsHolding] = useState(false);
+
+  // Update progress bar based on recording duration
+  useEffect
