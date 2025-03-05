@@ -1,0 +1,950 @@
+
+# Murmur - Audio Recommendation Platform
+
+Murmur is a web application that allows users to record and share audio recommendations.
+
+## Features
+
+- User authentication (register/login)
+- Record audio recommendations
+- Transcription of audio using OpenAI
+- Sentiment analysis of recommendations
+- Browse recommendations feed
+- User profiles
+
+## Tech Stack
+
+- **Frontend**: React with TypeScript, Tailwind CSS, shadcn/ui
+- **Backend**: Node.js with Express
+- **Database**: PostgreSQL with Drizzle ORM
+- **AI**: OpenAI for transcription and sentiment analysis
+
+## Setup Instructions
+
+### Prerequisites
+
+- Node.js (v16+)
+- PostgreSQL database
+
+### Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/murmur.git
+cd murmur
+```
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Set up environment variables:
+Create a `.env` file in the project root with the following variables:
+```
+DATABASE_URL="postgresql://username:password@localhost:5432/murmur"
+OPENAI_API_KEY="your-openai-api-key"
+```
+
+4. Set up the database:
+```bash
+npx drizzle-kit push
+```
+
+5. Start the development server:
+```bash
+npm run dev
+```
+
+The application will be available at http://localhost:5000
+
+## Deployment
+
+To build for production:
+```bash
+npm run build
+```
+
+To start in production mode:
+```bash
+npm run start
+```
+
+## License
+
+MIT
+mport { useState } from 'react';
+import { Route, Switch } from 'wouter';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+// Pages
+import HomePage from './pages/HomePage';
+import RecordPage from './pages/RecordPage';
+import ProfilePage from './pages/ProfilePage';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+
+// Components  
+import Navbar from './components/Navbar';
+import { Toaster } from './components/ui/toaster';
+
+// Create a client
+const queryClient = new QueryClient();
+
+function App() {
+  const [user, setUser] = useState<{ id: number; username: string } | null>(null);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <div className="min-h-screen bg-background">
+        <Navbar user={user} setUser={setUser} />
+        <main className="container mx-auto py-4 px-4">
+          <Switch>
+            <Route path="/" component={HomePage} />
+            <Route path="/record">
+              {() => <RecordPage user={user} />}
+            </Route>
+            <Route path="/profile/:id">
+              {(params) => <ProfilePage id={parseInt(params.id)} />}
+            </Route>
+            <Route path="/login">
+              {() => <LoginPage setUser={setUser} />}
+            </Route>
+            <Route path="/register">
+              {() => <RegisterPage setUser={setUser} />}
+            </Route>
+          </Switch>
+        </main>
+        <Toaster />
+      </div>
+    </QueryClientProvider>
+  );
+}
+
+export default App;
+
+import { useState, useRef, useEffect } from 'react';
+import { Button } from './ui/button';
+import { Slider } from './ui/slider';
+
+export function AudioPlayer({ url }: { url: string }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const setAudioData = () => {
+      setDuration(audio.duration);
+    };
+
+    const setAudioTime = () => {
+      setCurrentTime(audio.currentTime);
+    };
+
+    // Add event listeners
+    audio.addEventListener('loadeddata', setAudioData);
+    audio.addEventListener('timeupdate', setAudioTime);
+    audio.addEventListener('ended', () => setIsPlaying(false));
+
+    // Cleanup
+    return () => {
+      audio.removeEventListener('loadeddata', setAudioData);
+      audio.removeEventListener('timeupdate', setAudioTime);
+      audio.removeEventListener('ended', () => setIsPlaying(false));
+    };
+  }, []);
+
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const handleTimeChange = (value: number[]) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.currentTime = value[0];
+    setCurrentTime(value[0]);
+  };
+
+  const formatTime = (time: number) => {
+    if (isNaN(time)) return '0:00';
+    
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="space-y-2">
+      <audio ref={audioRef} src={url} />
+      
+      <div className="flex items-center space-x-2">
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          onClick={togglePlay}
+          className="w-8 h-8 p-0 rounded-full"
+        >
+          {isPlaying ? '⏸' : '▶️'}
+        </Button>
+        
+        <div className="flex-1">
+          <Slider
+            value={[currentTime]}
+            max={duration || 100}
+            step={0.1}
+            onValueChange={handleTimeChange}
+          />
+        </div>
+        
+        <div className="w-20 text-xs text-right">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+import { Link } from 'wouter';
+import { Button } from './ui/button';
+
+export default function Navbar({ 
+  user, 
+  setUser 
+}: { 
+  user: { id: number; username: string } | null;
+  setUser: (user: { id: number; username: string } | null) => void;
+}) {
+  const handleLogout = () => {
+    setUser(null);
+  };
+
+  return (
+    <nav className="bg-white border-b">
+      <div className="container mx-auto px-4 py-3 flex justify-between items-center">
+        <div className="flex items-center space-x-6">
+          <Link href="/">
+            <a className="text-xl font-bold text-primary">Murmur</a>
+          </Link>
+          <div className="hidden md:flex space-x-4">
+            <Link href="/">
+              <a className="text-gray-700 hover:text-primary">Home</a>
+            </Link>
+            {user && (
+              <Link href="/record">
+                <a className="text-gray-700 hover:text-primary">Record</a>
+              </Link>
+            )}
+          </div>
+        </div>
+        
+        <div className="flex items-center space-x-4">
+          {user ? (
+            <>
+              <Link href={`/profile/${user.id}`}>
+                <a className="text-gray-700 hover:text-primary">{user.username}</a>
+              </Link>
+              <Button variant="ghost" onClick={handleLogout}>Logout</Button>
+            </>
+          ) : (
+            <>
+              <Link href="/login">
+                <a>
+                  <Button variant="ghost">Login</Button>
+                </a>
+              </Link>
+              <Link href="/register">
+                <a>
+                  <Button>Register</Button>
+                </a>
+              </Link>
+            </>
+          )}
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+import { useQuery } from '@tanstack/react-query';
+import { Card, CardContent } from '../components/ui/card';
+import { Recommendation } from '@shared/schema';
+import { AudioPlayer } from '../components/AudioPlayer';
+import { Badge } from '../components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
+
+export default function HomePage() {
+  const { data: recommendations, isLoading } = useQuery<Recommendation[]>({
+    queryKey: ['recommendations'],
+    queryFn: async () => {
+      const res = await fetch('/api/recommendations');
+      if (!res.ok) throw new Error('Failed to fetch recommendations');
+      return res.json();
+    }
+  });
+
+  if (isLoading) {
+    return <div className="flex justify-center p-8">Loading recommendations...</div>;
+  }
+
+  return (
+    <div className="space-y-8">
+      <h1 className="text-3xl font-bold">Voice Recommendations</h1>
+      
+      <div className="grid gap-4">
+        {recommendations && recommendations.length > 0 ? (
+          recommendations.map((rec) => (
+            <Card key={rec.id} className="overflow-hidden">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-4 mb-4">
+                  <Avatar>
+                    <AvatarFallback>{rec.userId.toString()[0]}</AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <h3 className="font-medium">User #{rec.userId}</h3>
+                    <Badge variant="outline">{rec.category}</Badge>
+                  </div>
+                </div>
+                
+                <h2 className="text-xl font-semibold mb-2">{rec.title}</h2>
+                <p className="mb-4 text-gray-700">{rec.transcription}</p>
+                
+                <div className="bg-gray-50 p-3 rounded-md mb-2">
+                  <AudioPlayer url={rec.audioUrl} />
+                </div>
+                
+                <div className="mt-2 text-sm text-gray-500">
+                  Sentiment: {rec.sentiment?.rating}/10 (Confidence: {Math.round(rec.sentiment?.confidence * 100)}%)
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        ) : (
+          <Card>
+            <CardContent className="p-6 text-center">
+              <p>No recommendations found. Be the first to add one!</p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+import { useState } from 'react';
+import { useLocation } from 'wouter';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../components/ui/card';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { useToast } from '../hooks/use-toast';
+
+export default function LoginPage({ setUser }: { setUser: (user: { id: number; username: string }) => void }) {
+  const [location, navigate] = useLocation();
+  const { toast } = useToast();
+  const [formData, setFormData] = useState({
+    username: '',
+    password: ''
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+  
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    
+    try {
+      const response = await fetch('/api/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Login failed');
+      }
+      
+      const user = await response.json();
+      setUser({ id: user.id, username: user.username });
+      
+      toast({
+        title: 'Login Successful',
+        description: `Welcome back, ${user.username}!`,
+      });
+      
+      navigate('/');
+    } catch (error) {
+      console.error('Login error:', error);
+      toast({
+        title: 'Login Failed',
+        description: error instanceof Error ? error.message : 'Unknown error occurred',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  return (
+    <div className="max-w-md mx-auto">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-2xl">Login</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                name="username"
+                value={formData.username}
+                onChange={handleChange}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                value={formData.password}
+                onChange={handleChange}
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? 'Logging in...' : 'Login'}
+            </Button>
+          </form>
+        </CardContent>
+        <CardFooter className="flex justify-center">
+          <p className="text-sm text-gray-500">
+            Don't have an account?{' '}
+            <Button variant="link" className="p-0" onClick={() => navigate('/register')}>
+              Register
+            </Button>
+          </p>
+        </CardFooter>
+      </Card>
+    </div>
+  );
+}
+
+import { useQuery } from '@tanstack/react-query';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Recommendation } from '@shared/schema';
+import { AudioPlayer } from '../components/AudioPlayer';
+import { Badge } from '../components/ui/badge';
+
+export default function ProfilePage({ id }: { id: number }) {
+  const { data: recommendations, isLoading } = useQuery<Recommendation[]>({
+    queryKey: ['recommendationsByUser', id],
+    queryFn: async () => {
+      const res = await fetch(`/api/recommendations/user/${id}`);
+      if (!res.ok) throw new Error('Failed to fetch recommendations');
+      return res.json();
+    }
+  });
+
+  if (isLoading) {
+    return <div className="flex justify-center p-8">Loading profile...</div>;
+  }
+
+  return (
+    <div className="space-y-8">
+      <Card>
+        <CardHeader>
+          <CardTitle>Profile</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center text-xl text-white font-bold">
+              {id.toString()[0]}
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">User #{id}</h2>
+              <p className="text-gray-500">Joined recently</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      
+      <h2 className="text-2xl font-bold mt-8">Recommendations</h2>
+      
+      <div className="grid gap-4">
+        {recommendations && recommendations.length > 0 ? (
+          recommendations.map((rec) => (
+            <Card key={rec.id} className="overflow-hidden">
+              <CardContent className="p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-semibold">{rec.title}</h3>
+                  <Badge variant="outline">{rec.category}</Badge>
+                </div>
+                
+                <p className="mb-4 text-gray-700">{rec.transcription}</p>
+                
+                <div className="bg-gray-50 p-3 rounded-md mb-2">
+                  <AudioPlayer url={rec.audioUrl} />
+                </div>
+                
+                <div className="mt-2 text-sm text-gray-500">
+                  Sentiment: {rec.sentiment?.rating}/10 (Confidence: {Math.round(rec.sentiment?.confidence * 100)}%)
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        ) : (
+          <Card>
+            <CardContent className="p-6 text-center">
+              <p>No recommendations found.</p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+import { useState, useRef } from 'react';
+import { useLocation } from 'wouter';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { useToast } from '../hooks/use-toast';
+
+export default function RecordPage({ user }: { user: { id: number; username: string } | null }) {
+  const [location, navigate] = useLocation();
+  const { toast } = useToast();
+  const [recording, setRecording] = useState(false);
+  const [audioURL, setAudioURL] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  
+  if (!user) {
+    return (
+      <Card className="max-w-md mx-auto">
+        <CardContent className="p-6 text-center">
+          <p className="mb-4">Please log in to create recommendations</p>
+          <Button onClick={() => navigate('/login')}>Log In</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+  
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      chunksRef.current = [];
+      
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
+      
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        const url = URL.createObjectURL(blob);
+        setAudioURL(url);
+      };
+      
+      mediaRecorder.start();
+      setRecording(true);
+    } catch (err) {
+      console.error('Error accessing microphone:', err);
+      toast({
+        title: 'Error',
+        description: 'Could not access your microphone',
+        variant: 'destructive',
+      });
+    }
+  };
+  
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+    }
+  };
+  
+  const resetRecording = () => {
+    if (audioURL) {
+      URL.revokeObjectURL(audioURL);
+    }
+    setAudioURL(null);
+  };
+  
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!audioURL || !title || !category) {
+      toast({
+        title: 'Missing information',
+        description: 'Please fill all fields and record audio',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    try {
+      setSubmitting(true);
+      
+      const blob = await fetch(audioURL).then(r => r.blob());
+      const formData = new FormData();
+      formData.append('title', title);
+      formData.append('category', category);
+      formData.append('userId', user.id.toString());
+      formData.append('audioBlob', blob);
+      
+      const response = await fetch('/api/recommendations', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to create recommendation');
+      }
+      
+      toast({
+        title: 'Success',
+        description: 'Your recommendation has been published!',
+      });
+      
+      navigate('/');
+    } catch (error) {
+      console.error('Error submitting recommendation:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to submit recommendation',
+        variant: 'destructive',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  
+  return (
+    <div className="max-w-xl mx-auto">
+      <Card>
+        <CardHeader>
+          <CardTitle>Create Voice Recommendation</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="title">Title</Label>
+                <Input 
+                  id="title" 
+                  value={title} 
+                  onChange={(e) => setTitle(e.target.value)} 
+                  placeholder="Title of your recommendation"
+                  required
+                />
+              </div>
+              
+              <div>
+                <Label htmlFor="category">Category</Label>
+                <Select value={category} onValueChange={setCategory} required>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Food">Food</SelectItem>
+                    <SelectItem value="Travel">Travel</SelectItem>
+                    <SelectItem value="Shopping">Shopping</SelectItem>
+                    <SelectItem value="Entertainment">Entertainment</SelectItem>
+                    <SelectItem value="Technology">Technology</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Audio Recording</Label>
+                <div className="flex flex-col items-center bg-gray-50 p-6 rounded-md border border-dashed">
+                  {!audioURL ? (
+                    <div className="space-y-4 w-full text-center">
+                      <div className="text-sm text-gray-500">
+                        {recording ? 'Recording...' : 'Click to record audio'}
+                      </div>
+                      <Button 
+                        type="button"
+                        variant={recording ? "destructive" : "secondary"}
+                        className="w-full"
+                        onClick={recording ? stopRecording : startRecording}
+                      >
+                        {recording ? 'Stop Recording' : 'Start Recording'}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="w-full space-y-2">
+                      <audio src={audioURL} controls className="w-full" />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        onClick={resetRecording} 
+                        className="w-full"
+                      >
+                        Record Again
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <Button 
+              type="submit" 
+              disabled={!audioURL || !title || !category || submitting}
+              className="w-full"
+            >
+              {submitting ? 'Publishing...' : 'Publish Recommendation'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+import { useState } from 'react';
+import { useLocation } from 'wouter';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../components/ui/card';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { useToast } from '../hooks/use-toast';
+
+export default function RegisterPage({ setUser }: { setUser: (user: { id: number; username: string }) => void }) {
+  const [location, navigate] = useLocation();
+  const { toast } = useToast();
+  const [formData, setFormData] = useState({
+    username: '',
+    password: ''
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+  
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    
+    try {
+      const response = await fetch('/api/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Registration failed');
+      }
+      
+      const user = await response.json();
+      setUser({ id: user.id, username: user.username });
+      
+      toast({
+        title: 'Registration Successful',
+        description: `Welcome, ${user.username}!`,
+      });
+      
+      navigate('/');
+    } catch (error) {
+      console.error('Registration error:', error);
+      toast({
+        title: 'Registration Failed',
+        description: error instanceof Error ? error.message : 'Unknown error occurred',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  return (
+    <div className="max-w-md mx-auto">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-2xl">Register</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                name="username"
+                value={formData.username}
+                onChange={handleChange}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                value={formData.password}
+                onChange={handleChange}
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? 'Registering...' : 'Register'}
+            </Button>
+          </form>
+        </CardContent>
+        <CardFooter className="flex justify-center">
+          <p className="text-sm text-gray-500">
+            Already have an account?{' '}
+            <Button variant="link" className="p-0" onClick={() => navigate('/login')}>
+              Login
+            </Button>
+          </p>
+        </CardFooter>
+      </Card>
+    </div>
+  );
+}
+
+import { OpenAI } from 'openai';
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || '',
+});
+
+// Transcribe audio to text
+export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string }> {
+  try {
+    const buffer = Buffer.from(await audioBlob.arrayBuffer());
+    const file = new File([buffer], 'audio.webm', { type: 'audio/webm' });
+    
+    const transcription = await openai.audio.transcriptions.create({
+      file,
+      model: 'whisper-1',
+    });
+    
+    return { text: transcription.text };
+  } catch (error) {
+    console.error('Error transcribing audio:', error);
+    throw new Error('Failed to transcribe audio');
+  }
+}
+
+// Analyze sentiment of text
+export async function analyzeSentiment(text: string): Promise<{ rating: number; confidence: number }> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a sentiment analysis tool. Rate the sentiment of the following text on a scale of 1-10 (1 being very negative, 10 being very positive) and provide a confidence level from 0-1.'
+        },
+        {
+          role: 'user',
+          content: text
+        }
+      ],
+      response_format: { type: 'json_object' }
+    });
+    
+    const result = JSON.parse(response.choices[0].message.content || '{"rating": 5, "confidence": 0.5}');
+    
+    return {
+      rating: result.rating,
+      confidence: result.confidence
+    };
+  } catch (error) {
+    console.error('Error analyzing sentiment:', error);
+    return { rating: 5, confidence: 0.5 }; // Default neutral sentiment
+  }
+}
+import { drizzle } from 'drizzle-orm/neon-serverless';
+import { neon } from '@neondatabase/serverless';
+import { users, recommendations, type User, type Recommendation, type InsertUser, type InsertRecommendation } from '@shared/schema';
+import { eq } from 'drizzle-orm';
+
+// Create database client
+const sql = neon(process.env.DATABASE_URL || '');
+const db = drizzle(sql);
+
+// User operations
+export async function createUser(userData: InsertUser): Promise<User> {
+  const [user] = await db.insert(users).values(userData).returning();
+  return user;
+}
+
+export async function getUserByUsername(username: string): Promise<User | undefined> {
+  const result = await db.select().from(users).where(eq(users.username, username));
+  return result[0];
+}
+
+export async function getUserById(id: number): Promise<User | undefined> {
+  const result = await db.select().from(users).where(eq(users.id, id));
+  return result[0];
+}
+
+// Recommendation operations
+export async function createRecommendation(data: Omit<InsertRecommendation, 'audioBlob'>): Promise<Recommendation> {
+  const [recommendation] = await db.insert(recommendations).values(data).returning();
+  return recommendation;
+}
+
+export async function getRecommendations(): Promise<Recommendation[]> {
+  return db.select().from(recommendations).orderBy(recommendations.createdAt);
+}
+
+export async function getRecommendationsByUser(userId: number): Promise<Recommendation[]> {
+  return db.select()
+    .from(recommendations)
+    .where(eq(recommendations.userId, userId))
+    .orderBy(recommendations.createdAt);
+}
+
+export const storage = {
+  createUser,
+  getUserByUsername,
+  getUserById,
+  createRecommendation,
+  getRecommendations,
+  getRecommendationsByUser
+};
