@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Primary Colors */
+    --background: 234 67% 90%; /* Soft Periwinkle (#D0D4F9) */
+    --foreground: 235 20% 21%; /* Deep Indigo (#2B2D42) */
+
+    --card: 240 80% 98%; /* Surface White (#F9F9FD) */
+    --card-foreground: 235 20% 21%; /* Deep Indigo (#2B2D42) */
+
+    --popover: 240 80% 98%; /* Surface White (#F9F9FD) */
+    --popover-foreground: 235 20% 21%; /* Deep Indigo (#2B2D42) */
+
+    /* Secondary Colors */
+    --primary: 222 40% 64%; /* Accent Blue (#7B91C9) */
+    --primary-foreground: 240 80% 98%; /* Surface White (#F9F9FD) */
+
+    --secondary: 245 25% 70%; /* Accent Lavender (#9F9BC8) */
+    --secondary-foreground: 240 80% 98%; /* Surface White (#F9F9FD) */
+
+    --accent: 242 24% 52%; /* Signal Purple (#6665A2) */
+    --accent-foreground: 240 80% 98%; /* Surface White (#F9F9FD) */
+
+    /* Supporting Colors */
+    --success: 174 35% 80%; /* Mint (#B8E1DD) */
+    --success-foreground: 235 20% 21%; /* Deep Indigo (#2B2D42) */
+
+    --destructive: 10 75% 83%; /* Soft Coral (#F3BDB5) */
+    --destructive-foreground: 235 20% 21%; /* Deep Indigo (#2B2D42) */
+
+    --warning: 39 45% 84%; /* Sand (#E8DBC5) */
+    --warning-foreground: 235 20% 21%; /* Deep Indigo (#2B2D42) */
+
+    --muted: 240 15% 89%; /* Mist (#DADBE9) */
+    --muted-foreground: 235 10% 40%; /* Lighter Deep Indigo */
+
+    /* UI Elements */
+    --border: 234 67% 90%; /* Soft Periwinkle (#D0D4F9) */
+    --input: 234 67% 90%; /* Soft Periwinkle (#D0D4F9) */
+    --ring: 222 40% 64%; /* Accent Blue (#7B91C9) */
+
+    /* Category Colors */
+    --food: 174 35% 80%; /* Mint (#B8E1DD) */
+    --travel: 10 75% 83%; /* Soft Coral (#F3BDB5) */
+    --books: 245 25% 70%; /* Accent Lavender (#9F9BC8) */
+    --outdoors: 39 45% 84%; /* Sand (#E8DBC5) */
+    --music: 242 24% 52%; /* Signal Purple (#6665A2) */
+    --shopping: 10 75% 83%; /* Soft Coral (#F3BDB5) */
+    --entertainment: 245 25% 70%; /* Accent Lavender (#9F9BC8) */
+
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    /* Primary Colors - Dark Mode */
+    --background: 235 20% 15%; /* Darker Deep Indigo */
+    --foreground: 240 80% 95%; /* Lighter Surface White */
+
+    --card: 235 20% 20%; /* Darker but still visible */
+    --card-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    --popover: 235 20% 20%; /* Darker but still visible */
+    --popover-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    /* Secondary Colors - Dark Mode */
+    --primary: 222 40% 50%; /* Darker Accent Blue */
+    --primary-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    --secondary: 245 25% 50%; /* Darker Accent Lavender */
+    --secondary-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    --accent: 242 24% 40%; /* Darker Signal Purple */
+    --accent-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    /* Supporting Colors - Dark Mode */
+    --success: 174 35% 40%; /* Darker Mint */
+    --success-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    --destructive: 10 75% 40%; /* Darker Soft Coral */
+    --destructive-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    --warning: 39 45% 40%; /* Darker Sand */
+    --warning-foreground: 240 80% 95%; /* Lighter Surface White */
+
+    --muted: 240 15% 30%; /* Darker Mist */
+    --muted-foreground: 240 80% 80%; /* Slightly dimmed white */
+
+    /* UI Elements - Dark Mode */
+    --border: 235 20% 30%; /* Visible but not harsh */
+    --input: 235 20% 30%; /* Visible but not harsh */
+    --ring: 222 40% 50%; /* Darker Accent Blue */
+
+    /* Category Colors - Dark Mode */
+    --food: 174 35% 40%; /* Darker Mint */
+    --travel: 10 75% 40%; /* Darker Soft Coral */
+    --books: 245 25% 50%; /* Darker Accent Lavender */
+    --outdoors: 39 45% 40%; /* Darker Sand */
+    --music: 242 24% 40%; /* Darker Signal Purple */
+    --shopping: 10 75% 40%; /* Darker Soft Coral */
+    --entertainment: 245 25% 50%; /* Darker Accent Lavender */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='rgba(208,212,249,0.15)' fill-rule='evenodd'/%3E%3C/svg%3E");
+  }
+}
+
